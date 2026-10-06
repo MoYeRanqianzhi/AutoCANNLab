@@ -1,0 +1,14 @@
+# 凭证与运行时状态（含 token，严禁入库）
+.agents/secrets/
+.agents/runtime.local.json
+
+# 运行产物
+logs/
+__pycache__/
+*.pyc
+.venv/
+
+# 调查临时产物
+.agents/tmp/
+.playwright-mcp/
+*.png

@@ -3633,3 +3633,13 @@ h1 {
 .status-dot.red {
   background: #c04545;
 }
+
+/* 真实登录二维码 */
+.real-qr {
+  width: 200px;
+  height: 200px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #fff;
+  padding: 8px;
+}

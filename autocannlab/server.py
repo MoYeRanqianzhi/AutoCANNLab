@@ -89,25 +89,156 @@ def add_account(body: AccountIn, _: None = Depends(require_auth)):
                                proxy_url=store.proxy_url(body.proxy_id),
                                on_tokens_refreshed=lambda tk: tokens.update(tk))
         client.prepare()
-        info = client.get_json("/uc/api/v1/user/oauth/userInfo")
-        data = info.get("data") if isinstance(info.get("data"), dict) else info
-        username = data.get("username") or body.username
-        if not username:
-            raise HTTPException(400, "无法从 userInfo 获取用户名")
-        if username and store.find_account_by_username(username):
-            raise HTTPException(409, f"账号 {username} 已存在")
-        account = store.add_account(
-            username=username,
-            tokens={"access_token": client.access_token,
-                    "refresh_token": tokens["refresh_token"],
-                    "username": username},
-            note=body.note, proxy_id=body.proxy_id,
-        )
-        return public_account(account)
+        return _register_account(client, tokens, body.note, body.proxy_id)
     except ApiError as e:
         raise HTTPException(400, f"登录态校验失败: {e.message}") from e
     except httpx.HTTPError as e:
         raise HTTPException(502, f"网络错误: {e}") from e
+
+
+def _register_account(client: GitCodeClient, tokens: dict, note: str,
+                      proxy_id: str | None) -> dict:
+    """校验通过后的公共入库路径（登录态导入与三种登录方式共用）。"""
+    info = client.get_json("/uc/api/v1/user/oauth/userInfo")
+    data = info.get("data") if isinstance(info.get("data"), dict) else info
+    username = data.get("username") or tokens.get("username")
+    if not username:
+        raise HTTPException(400, "无法从 userInfo 获取用户名")
+    existing = store.find_account_by_username(username)
+    if existing:
+        # 已存在则更新其登录态（刷新登录场景）
+        updated = store.update_account(existing["id"], tokens={
+            "access_token": client.access_token,
+            "refresh_token": tokens["refresh_token"],
+            "username": username,
+        })
+        account = public_account(updated)
+        account["updated"] = True
+        return account
+    account = store.add_account(
+        username=username,
+        tokens={"access_token": client.access_token,
+                "refresh_token": tokens["refresh_token"],
+                "username": username},
+        note=note, proxy_id=proxy_id,
+    )
+    return public_account(account)
+
+
+# ---------- 登录（扫码/短信/密码） ----------
+
+from .auth import LoginClient  # noqa: E402
+
+_login_client: LoginClient | None = None
+
+
+def login_session() -> LoginClient:
+    global _login_client
+    if _login_client is None:
+        _login_client = LoginClient()
+    return _login_client
+
+
+class CaptchaIn(BaseModel):
+    captcha_id: str = ""
+    token: str = ""
+    authenticate: str = ""
+    validate: str = ""
+
+
+class SmsSendIn(BaseModel):
+    mobile: str
+    captcha: CaptchaIn
+
+
+class SmsLoginIn(BaseModel):
+    mobile: str
+    code: str
+    mask: str = ""
+    note: str = ""
+    proxy_id: str | None = None
+
+
+class PasswordLoginIn(BaseModel):
+    username: str
+    password: str
+    captcha: CaptchaIn
+    note: str = ""
+    proxy_id: str | None = None
+
+
+def _login_to_account(tokens: dict, note: str, proxy_id: str | None) -> dict:
+    """登录成功响应 → 校验 → 入库/更新。"""
+    client = GitCodeClient(
+        tokens={"access_token": tokens.get("access_token", ""),
+                "refresh_token": tokens.get("refresh_token", "")},
+        proxy_url=store.proxy_url(proxy_id),
+        on_tokens_refreshed=lambda tk: tokens.update(tk),
+    )
+    client.prepare()
+    merged = {"access_token": client.access_token,
+              "refresh_token": tokens.get("refresh_token", "")}
+    return _register_account(client, merged, note, proxy_id)
+
+
+@app.post("/api/auth/qr")
+def auth_qr_create(_: None = Depends(require_auth)):
+    try:
+        return login_session().create_qr()
+    except ApiError as e:
+        raise HTTPException(400, f"创建二维码失败: {e.message}") from e
+
+
+@app.get("/api/auth/qr/{scene_id}")
+def auth_qr_status(scene_id: str, _: None = Depends(require_auth)):
+    try:
+        return login_session().qr_status(scene_id)
+    except ApiError as e:
+        raise HTTPException(400, f"查询失败: {e.message}") from e
+
+
+@app.post("/api/auth/qr/{scene_id}/confirm")
+def auth_qr_confirm(scene_id: str, body: dict, _: None = Depends(require_auth)):
+    """用户确认后换取令牌并入库。body: {note?, proxy_id?}"""
+    try:
+        tokens = login_session().exchange_qr(scene_id)
+        if not tokens.get("access_token") and not tokens.get("refresh_token"):
+            raise HTTPException(400, f"扫码确认未返回令牌: {str(tokens)[:150]}")
+        return _login_to_account(tokens, body.get("note") or "",
+                                 body.get("proxy_id"))
+    except ApiError as e:
+        raise HTTPException(400, f"登录失败: {e.message}") from e
+
+
+@app.post("/api/auth/sms/send")
+def auth_sms_send(body: SmsSendIn, _: None = Depends(require_auth)):
+    try:
+        return login_session().send_sms_code(body.mobile, body.captcha.model_dump())
+    except ApiError as e:
+        raise HTTPException(400, f"发送验证码失败: {e.message}") from e
+
+
+@app.post("/api/auth/sms/verify")
+def auth_sms_verify(body: SmsLoginIn, _: None = Depends(require_auth)):
+    try:
+        tokens = login_session().login_mobile(body.mobile, body.code, body.mask)
+        if not tokens.get("access_token") and not tokens.get("refresh_token"):
+            raise HTTPException(400, f"验证码登录未返回令牌: {str(tokens)[:150]}")
+        return _login_to_account(tokens, body.note, body.proxy_id)
+    except ApiError as e:
+        raise HTTPException(400, f"登录失败: {e.message}") from e
+
+
+@app.post("/api/auth/password")
+def auth_password(body: PasswordLoginIn, _: None = Depends(require_auth)):
+    try:
+        tokens = login_session().login_password(
+            body.username, body.password, body.captcha.model_dump())
+        if not tokens.get("access_token") and not tokens.get("refresh_token"):
+            raise HTTPException(400, f"登录未返回令牌: {str(tokens)[:150]}")
+        return _login_to_account(tokens, body.note, body.proxy_id)
+    except ApiError as e:
+        raise HTTPException(400, f"登录失败: {e.message}") from e
 
 
 @app.delete("/api/accounts/{account_id}")

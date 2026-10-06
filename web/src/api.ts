@@ -162,4 +162,33 @@ export const api = {
     request<{ file: string; level: string; message: string }[]>(
       `/logs?level=${encodeURIComponent(level)}&q=${encodeURIComponent(q)}&limit=200`,
     ),
+  // 登录（服务端代理 GitCode 登录流程）
+  qrCreate: () => request<{ qrcode: string; scene_id: string }>("/auth/qr", { method: "POST" }),
+  qrStatus: (sceneId: string) =>
+    request<{ status: string; [key: string]: unknown }>(`/auth/qr/${sceneId}`),
+  qrConfirm: (sceneId: string, note: string) =>
+    request<ServerAccount>(`/auth/qr/${sceneId}/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  smsSend: (
+    mobile: string,
+    captcha: { captcha_id: string; token: string; authenticate: string; validate: string },
+  ) =>
+    request<{ mask?: string; [key: string]: unknown }>("/auth/sms/send", {
+      method: "POST",
+      body: JSON.stringify({ mobile, captcha }),
+    }),
+  smsVerify: (body: {
+    mobile: string;
+    code: string;
+    mask: string;
+    note: string;
+  }) => request<ServerAccount>("/auth/sms/verify", { method: "POST", body: JSON.stringify(body) }),
+  passwordLogin: (body: {
+    username: string;
+    password: string;
+    captcha: { captcha_id: string; token: string; authenticate: string; validate: string };
+    note: string;
+  }) => request<ServerAccount>("/auth/password", { method: "POST", body: JSON.stringify(body) }),
 };

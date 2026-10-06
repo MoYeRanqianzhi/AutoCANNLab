@@ -432,39 +432,6 @@ export default function App() {
       })
       .catch((error) => notify(`保存失败：${(error as Error).message}`));
   }
-  async function importAccount(
-    tokens: { access_token: string; refresh_token: string },
-    note: string,
-  ) {
-    try {
-      const account = await api.addAccount({
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        note,
-      });
-      await loadServerState({ silent: true });
-      setActiveId(account.id);
-      setDialog(null);
-      notify(`账号 ${account.username} 已导入并校验通过`);
-      addLog(`已导入账号 ${account.username}（登录态校验通过）`, "success");
-    } catch (error) {
-      notify(`导入失败：${(error as Error).message}`);
-    }
-  }
-  async function refreshLogin(accountId: string, tokens: {
-    access_token: string;
-    refresh_token: string;
-  }) {
-    // 刷新登录 = 用新 token 覆盖对应账号：先移除旧的占位说明，实际以导入校验为准。
-    const target = accounts.find((account) => account.id === accountId);
-    if (!target) return;
-    try {
-      await api.removeAccount(accountId);
-      await importAccount(tokens, target.name);
-    } catch (error) {
-      notify(`刷新失败：${(error as Error).message}`);
-    }
-  }
   function testProxy(id: string) {
     if (testingProxy) return;
     setTestingProxy(id);
@@ -1721,15 +1688,27 @@ export default function App() {
       {dialog?.type === "login" && (
         <Modal
           title={dialog.accountId ? "刷新 GitCode 登录" : "连接 GitCode 账号"}
-          subtitle="登录态导入为真实功能；扫码/短信/密码仅作展示。"
+          subtitle="扫码 / 短信 / 密码 / 登录态导入均为真实登录，服务端代理完成。"
           onClose={() => setDialog(null)}
         >
           <LoginForm
-            onImport={importAccount}
-            onRefreshLogin={(tokens) => {
-              if (dialog.accountId) void refreshLogin(dialog.accountId, tokens);
-            }}
             refresh={!!dialog.accountId}
+            notify={notify}
+            onSuccess={(account) => {
+              setDialog(null);
+              void loadServerState({ silent: true });
+              notify(
+                account.updated
+                  ? `账号 ${account.username ?? ""} 登录态已更新`
+                  : `账号 ${account.username ?? ""} 已连接`,
+              );
+              addLog(
+                account.updated
+                  ? `账号 ${account.username ?? ""} 登录态已刷新`
+                  : `已添加账号 ${account.username ?? ""}`,
+                "success",
+              );
+            }}
           />
         </Modal>
       )}
@@ -2114,91 +2093,414 @@ function Stat({
 }
 
 function LoginForm({
-  onImport,
-  onRefreshLogin,
   refresh,
+  onSuccess,
+  notify,
 }: {
-  onImport: (
-    tokens: { access_token: string; refresh_token: string },
-    note: string,
-  ) => Promise<void>;
-  onRefreshLogin: (tokens: {
-    access_token: string;
-    refresh_token: string;
-  }) => void;
   refresh: boolean;
+  onSuccess: (account: { username: string | null; updated?: boolean }) => void;
+  notify: (message: string) => void;
 }) {
+  const [tab, setTab] = useState<"qr" | "sms" | "password" | "token">("qr");
   const [name, setName] = useState("");
-  const [accessToken, setAccessToken] = useState("");
-  const [refreshToken, setRefreshToken] = useState("");
   const [busy, setBusy] = useState(false);
-  // 登录态导入是唯一的新增账号途径：服务端用 Refresh Token 现场校验并轮换保存。
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    const tokens = {
-      access_token: accessToken.trim(),
-      refresh_token: refreshToken.trim(),
+
+  // ---------- 扫码 ----------
+  const [qrImage, setQrImage] = useState("");
+  const [sceneId, setSceneId] = useState("");
+  const [qrState, setQrState] = useState<
+    "loading" | "waiting" | "scanned" | "expired" | "error"
+  >("loading");
+  useEffect(() => {
+    if (tab !== "qr" || refresh) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let scene = "";
+    const start = async () => {
+      try {
+        const qr = await api.qrCreate();
+        if (!alive) return;
+        scene = qr.scene_id ?? "";
+        setSceneId(scene);
+        setQrImage(qr.qrcode ?? "");
+        setQrState("waiting");
+        poll();
+      } catch (error) {
+        if (alive) setQrState("error");
+        notify((error as Error).message);
+      }
     };
-    const done = () => setBusy(false);
-    if (refresh) {
-      onRefreshLogin(tokens);
-      done();
-    } else {
-      void onImport(tokens, name).finally(done);
+    const poll = async () => {
+      if (!alive || !scene) return;
+      try {
+        const status = await api.qrStatus(scene);
+        const value = String(status.status ?? "").toUpperCase();
+        if (value === "EXPIRED") {
+          setQrState("expired");
+          return;
+        }
+        if (value && value !== "WAITING") setQrState("scanned");
+      } catch {
+        /* 轮询失败继续下一轮 */
+      }
+      timer = setTimeout(poll, 2500);
+    };
+    void start();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, refresh]);
+
+  async function confirmQr() {
+    if (!sceneId) return;
+    setBusy(true);
+    try {
+      const account = await api.qrConfirm(sceneId, name);
+      onSuccess(account);
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
+
+  // ---------- 易盾验证码 ----------
+  const yidunCaptchaId = "5df84d9b61b743e48dbb7b14abab7f13"; // GitCode 国内 NORMAL
+  function yidunValidate(): Promise<{
+    captcha_id: string;
+    token: string;
+    authenticate: string;
+    validate: string;
+  }> {
+    return new Promise((resolve, reject) => {
+      const w = window as unknown as {
+        initNECaptchaWithFallback?: (
+          opts: Record<string, unknown>,
+          onReady: (inst: { popUp: () => void }) => void,
+          onError: (err: Error) => void,
+        ) => void;
+      };
+      if (!w.initNECaptchaWithFallback) {
+        reject(new Error("验证码组件未加载（检查网络后刷新页面）"));
+        return;
+      }
+      const holder = document.getElementById("yidun-holder");
+      if (!holder) {
+        reject(new Error("验证码容器缺失"));
+        return;
+      }
+      holder.innerHTML = "";
+      const mount = document.createElement("div");
+      mount.id = `yidun-${Date.now()}`;
+      holder.appendChild(mount);
+      w.initNECaptchaWithFallback(
+        {
+          captchaId: yidunCaptchaId,
+          mode: "popup",
+          element: `#${mount.id}`,
+          onVerify: (err: Error | null, data: { validate?: string }) => {
+            if (err || !data?.validate) {
+              reject(new Error("验证码未完成"));
+              return;
+            }
+            resolve({
+              captcha_id: yidunCaptchaId,
+              token: "",
+              authenticate: "",
+              validate: data.validate,
+            });
+          },
+        },
+        (instance) => instance.popUp(),
+        (err) => reject(err),
+      );
+    });
+  }
+
+  // ---------- 短信 ----------
+  const [mobile, setMobile] = useState("");
+  const [smsCode, setSmsCode] = useState("");
+  const [smsMask, setSmsMask] = useState("");
+  const [countdown, setCountdown] = useState(0);
+  const [sending, setSending] = useState(false);
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const t = setTimeout(() => setCountdown((value) => value - 1), 1000);
+    return () => clearTimeout(t);
+  }, [countdown]);
+
+  async function sendSms() {
+    if (sending || countdown > 0) return;
+    setSending(true);
+    try {
+      const captcha = await yidunValidate();
+      const resp = await api.smsSend(mobile, captcha);
+      const mask = (resp as { mask?: string }).mask;
+      if (mask) setSmsMask(String(mask));
+      setCountdown(60);
+      notify("验证码已发送，请查收短信");
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function submitSms(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const account = await api.smsVerify({
+        mobile,
+        code: smsCode,
+        mask: smsMask,
+        note: name,
+      });
+      onSuccess(account);
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ---------- 密码 ----------
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  async function submitPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const captcha = await yidunValidate();
+      const account = await api.passwordLogin({
+        username,
+        password,
+        captcha,
+        note: name,
+      });
+      onSuccess(account);
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ---------- 登录态导入 ----------
+  const [accessToken, setAccessToken] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
+  async function submitImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const account = await api.addAccount({
+        access_token: accessToken.trim(),
+        refresh_token: refreshToken.trim(),
+        note: name,
+      });
+      onSuccess(account);
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const tabs = [
+    { id: "qr", label: "扫码登录", icon: "qr" },
+    { id: "sms", label: "短信登录", icon: "phone" },
+    { id: "password", label: "密码登录", icon: "lock" },
+    { id: "token", label: "登录态导入", icon: "code" },
+  ] as const;
+
   return (
-    <form onSubmit={submit}>
-      <div className="form-fields">
-        {!refresh && (
-          <label className="field">
-            账号备注
-            <input
-              value={name}
-              maxLength={30}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="例如：主账号"
-            />
-          </label>
-        )}
-        <label className="field">
-          Access Token
+    <>
+      {!refresh && (
+        <label className="field account-name-field">
+          账号备注
           <input
-            type="password"
-            autoComplete="off"
-            required
-            value={accessToken}
-            onChange={(event) => setAccessToken(event.target.value)}
-            placeholder="gitcode.com localStorage 的 access_token"
+            value={name}
+            maxLength={30}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="例如：主账号"
           />
         </label>
-        <label className="field">
-          Refresh Token
-          <input
-            type="password"
-            autoComplete="off"
-            required
-            value={refreshToken}
-            onChange={(event) => setRefreshToken(event.target.value)}
-            placeholder="gitcode.com localStorage 的 refresh_token"
-          />
-        </label>
-        <span className="form-hint">
-          获取方式：浏览器登录 gitcode.com → 控制台 → Application → Local Storage，
-          复制 access_token 与 refresh_token。服务端会现场校验并轮换保存（60 天有效期，
-          过期后重新导出即可）。
-        </span>
+      )}
+      <div className="login-tabs">
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            className={tab === item.id ? "selected" : ""}
+            onClick={() => setTab(item.id)}
+          >
+            <Icon name={item.icon} size={17} />
+            {item.label}
+          </button>
+        ))}
       </div>
-      <button
-        className="button primary full-width login-submit"
-        type="submit"
-        disabled={busy}
-      >
-        <Icon name="login" size={16} />
-        {busy ? "校验中…" : refresh ? "校验并更新登录态" : "校验并导入账号"}
-      </button>
-    </form>
+      {tab === "qr" && (
+        <div className="qr-panel">
+          {qrState === "error" ? (
+            <p className="form-hint">二维码加载失败，切换页签重试。</p>
+          ) : qrImage ? (
+            <img className="real-qr" src={qrImage} alt="GitCode 登录二维码" />
+          ) : (
+            <p className="form-hint">二维码生成中…</p>
+          )}
+          <strong>使用 GitCode 小程序扫码</strong>
+          <p className="form-hint">
+            {qrState === "expired"
+              ? "二维码已过期，请切换页签重新生成"
+              : qrState === "scanned"
+                ? "已扫码，请在手机上确认后点击下方按钮"
+                : "打开微信扫一扫，确认后回到这里"}
+          </p>
+          <button
+            className="button primary full-width login-submit"
+            disabled={busy || qrState === "expired" || qrState === "error" || !sceneId}
+            onClick={() => void confirmQr()}
+          >
+            <Icon name="check" size={16} />
+            我已扫码确认，完成登录
+          </button>
+        </div>
+      )}
+      {tab === "sms" && (
+        <form onSubmit={submitSms}>
+          <div className="form-fields">
+            <label className="field">
+              手机号码
+              <div className="phone-input">
+                <span>+86</span>
+                <input
+                  type="tel"
+                  pattern="1[0-9]{10}"
+                  maxLength={11}
+                  required
+                  value={mobile}
+                  onChange={(event) => setMobile(event.target.value)}
+                  placeholder="请输入 11 位手机号"
+                />
+              </div>
+            </label>
+            <label className="field">
+              短信验证码
+              <div className="code-input">
+                <input
+                  inputMode="numeric"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  required
+                  value={smsCode}
+                  onChange={(event) => setSmsCode(event.target.value)}
+                  placeholder="请输入 6 位验证码"
+                />
+                <button
+                  type="button"
+                  disabled={sending || countdown > 0 || mobile.length !== 11}
+                  onClick={() => void sendSms()}
+                >
+                  {sending
+                    ? "验证中…"
+                    : countdown > 0
+                      ? `${countdown}s 后重发`
+                      : "获取验证码"}
+                </button>
+              </div>
+            </label>
+            <span className="form-hint">
+              点击「获取验证码」会弹出网易易盾验证，完成后发送短信。
+            </span>
+          </div>
+          <button
+            className="button primary full-width login-submit"
+            type="submit"
+            disabled={busy}
+          >
+            <Icon name="login" size={16} />
+            登录
+          </button>
+        </form>
+      )}
+      {tab === "password" && (
+        <form onSubmit={submitPassword}>
+          <div className="form-fields">
+            <label className="field">
+              用户名 / 手机号 / 邮箱
+              <input
+                required
+                autoComplete="off"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              密码
+              <input
+                required
+                type="password"
+                autoComplete="off"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </label>
+            <span className="form-hint">
+              提交时先弹出网易易盾验证；密码由服务端按 GitCode 同款算法加密后传输。
+            </span>
+          </div>
+          <button
+            className="button primary full-width login-submit"
+            type="submit"
+            disabled={busy}
+          >
+            <Icon name="login" size={16} />
+            登录
+          </button>
+        </form>
+      )}
+      {tab === "token" && (
+        <form onSubmit={submitImport}>
+          <div className="form-fields">
+            <label className="field">
+              Access Token
+              <input
+                type="password"
+                autoComplete="off"
+                required
+                value={accessToken}
+                onChange={(event) => setAccessToken(event.target.value)}
+                placeholder="gitcode.com localStorage 的 access_token"
+              />
+            </label>
+            <label className="field">
+              Refresh Token
+              <input
+                type="password"
+                autoComplete="off"
+                required
+                value={refreshToken}
+                onChange={(event) => setRefreshToken(event.target.value)}
+                placeholder="gitcode.com localStorage 的 refresh_token"
+              />
+            </label>
+            <span className="form-hint">
+              服务端现场校验并轮换保存（60 天有效期，过期后重新导出即可）。
+            </span>
+          </div>
+          <button
+            className="button primary full-width login-submit"
+            type="submit"
+            disabled={busy}
+          >
+            <Icon name="login" size={16} />
+            校验并导入
+          </button>
+        </form>
+      )}
+      <div id="yidun-holder" />
+    </>
   );
 }
 

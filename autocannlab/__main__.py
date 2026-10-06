@@ -61,6 +61,11 @@ def cmd_full(client: GitCodeClient) -> int:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "server":
+        sys.argv = [sys.argv[0]] + sys.argv[2:]
+        from . import server
+        server.main()
+        return 0
     parser = argparse.ArgumentParser(prog="autocannlab", description="CANNLab 自动获取积分")
     parser.add_argument("mode", choices=["status", "daily", "full"], nargs="?",
                         default="daily", help="status=只查询 daily=日常任务 full=首次全量")

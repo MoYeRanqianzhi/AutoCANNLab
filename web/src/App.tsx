@@ -35,6 +35,7 @@ import {
   type Schedule,
   type Task,
 } from "./data";
+import { api, ApiError, getApiToken, setApiToken } from "./api";
 
 type DialogState =
   | { type: "login"; accountId?: string }
@@ -46,8 +47,10 @@ type DialogState =
   | { type: "full" }
   | { type: "search" }
   | { type: "help" }
+  | { type: "api-token" }
   | null;
-type Run = { accountId: string; ids: string[]; index: number };
+// run 现在对应服务端的一次执行（daily/full 链路），不再本地模拟。
+type Run = { runId: string; accountId: string; mode: "daily" | "full" };
 const statusLabels = {
   online: "登录有效",
   expired: "登录已过期",
@@ -102,6 +105,8 @@ export default function App() {
   const [logLevel, setLogLevel] = useState("all");
   const [period, setPeriod] = useState<"week" | "month">("week");
   const [testingProxy, setTestingProxy] = useState<string | null>(null);
+  const [apiOffline, setApiOffline] = useState(false);
+  const [tokenDraft, setTokenDraft] = useState("");
   const proxyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeAccount = accounts.find((account) => account.id === activeId)!;
   const tasks = taskSets[activeId] || [];
@@ -123,6 +128,152 @@ export default function App() {
     },
     [],
   );
+
+  // ---------- 服务端数据加载与映射 ----------
+  // UI 的账号/代理/计划形状是展示层视图，字段映射集中在 loadServerState。
+  const mapServerAccount = (a: {
+    id: string;
+    username: string | null;
+    note: string;
+    proxy_id: string | null;
+    enabled: boolean;
+    has_tokens: boolean;
+  }): Account => ({
+    id: a.id,
+    name: a.note || a.username || "未命名账号",
+    handle: a.username ?? "unknown",
+    color: "green",
+    status: !a.enabled ? "paused" : a.has_tokens ? "online" : "expired",
+    proxy: a.proxy_id ?? "direct",
+    points: 0,
+  });
+
+  const loadServerState = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      try {
+        const state = await api.state();
+        setApiOffline(false);
+        setAccounts(state.accounts.map(mapServerAccount));
+        setProxies(
+          state.proxies.map((p) => ({
+            ...p,
+            region: "",
+            latency: null,
+          })) as ProxyNode[],
+        );
+        setSchedule({
+          enabled: state.schedule.enabled,
+          time: state.schedule.time,
+          days: state.schedule.weekdays,
+          mode: state.schedule.mode,
+          account: state.schedule.account_id,
+        } as Schedule);
+        const fallback =
+          state.accounts.find((a) => a.is_default) ?? state.accounts[0];
+        if (fallback) {
+          setActiveId((current) =>
+            state.accounts.some((a) => a.id === current)
+              ? current
+              : fallback.id,
+          );
+          setDefaultId(fallback.id);
+        }
+      } catch (error) {
+        if (!opts?.silent) {
+          setApiOffline(true);
+          if (error instanceof ApiError && error.status === 401)
+            setDialog({ type: "api-token" });
+          else notify(`无法连接服务端：${(error as Error).message}`);
+        }
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [notify],
+  );
+
+  // 把服务端真实任务清单映射为 UI 任务行。
+  const taskIcon = (name: string): string => {
+    if (name.includes("签到")) return "calendar";
+    if (name.includes("Star") || name.includes("star")) return "star";
+    if (name.includes("访问")) return "globe";
+    if (name.includes("浏览") || name.includes("查看")) return "compass";
+    if (name.includes("搜索")) return "search";
+    if (name.includes("下载")) return "download";
+    if (name.includes("代码")) return "code";
+    if (name.includes("WebIDE") || name.includes("IDE")) return "terminal";
+    if (name.includes("领取") || name.includes("兑换")) return "gift";
+    return "compass";
+  };
+  const loadTasks = useCallback(
+    async (accountId: string) => {
+      try {
+        const list = await api.accountTasks(accountId);
+        setTaskSets((current) => ({
+          ...current,
+          [accountId]: list.map((t) => ({
+            id: String(t.task_id),
+            name: t.cn_name,
+            description: t.description,
+            category: t.category,
+            currency: t.currency,
+            points: t.score,
+            status: t.done ? ("done" as const) : ("pending" as const),
+            icon: taskIcon(t.cn_name),
+          })),
+        }));
+      } catch {
+        /* 任务清单拉取失败不阻塞页面，保留现有内容 */
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [],
+  );
+
+  const refreshAccountStatus = useCallback(async (accountId: string) => {
+    try {
+      const status = await api.accountStatus(accountId);
+      setAccounts((current) =>
+        current.map((a) =>
+          a.id === accountId
+            ? {
+                ...a,
+                points: status.cann_points ?? a.points,
+                status:
+                  status.refresh_days_left !== null &&
+                  status.refresh_days_left <= 0
+                    ? "expired"
+                    : a.status,
+              }
+            : a,
+        ),
+      );
+    } catch {
+      /* 状态查询失败保留旧值 */
+    }
+  }, []);
+
+  // 初始加载：已有 Token 才拉服务端；未配置时保留演示数据并提示。
+  useEffect(() => {
+    if (getApiToken()) void loadServerState();
+    else setApiOffline(true);
+  }, [loadServerState]);
+
+  // 切换账号时拉取真实任务与状态（服务端账号就绪后才拉，避免演示态误请求）。
+  useEffect(() => {
+    const known = accounts.some((account) => account.id === activeId);
+    if (!apiOffline && known && getApiToken()) {
+      void loadTasks(activeId);
+      void refreshAccountStatus(activeId);
+    }
+  }, [activeId, apiOffline, accounts, loadTasks, refreshAccountStatus]);
+
+  function saveApiToken() {
+    setApiToken(tokenDraft);
+    setDialog(null);
+    setTokenDraft("");
+    void loadServerState();
+    notify("已保存服务端 Token，正在同步真实数据");
+  }
 
   useEffect(() => {
     document.title = `AutoCANNLab · ${navigation.find((item) => item.id === page)?.label}`;
@@ -160,48 +311,44 @@ export default function App() {
     [],
   );
 
-  // 任务仅通过本地计时器模拟。保存运行所属账号，确保页面切换不改变奖励归属。
+  // 执行轮询：真实运行在服务端进行，这里跟踪 run 状态并把日志落到 UI。
   useEffect(() => {
     if (!run) return;
-    const timer = setTimeout(() => {
-      const task = initialTasks.find((item) => item.id === run.ids[run.index])!;
-      const nextId = run.ids[run.index + 1];
-      setTaskSets((current) => ({
-        ...current,
-        [run.accountId]: current[run.accountId].map((item) =>
-          item.id === task.id
-            ? { ...item, status: "done" }
-            : item.id === nextId
-              ? { ...item, status: "running" }
-              : item,
-        ),
-      }));
-      if (task.currency === "CANN")
-        setAccounts((current) =>
-          current.map((account) =>
-            account.id === run.accountId
-              ? { ...account, points: account.points + task.points }
-              : account,
-          ),
-        );
-      addLog(
-        `${task.name} · 演示完成${task.points ? `，+${task.points} ${task.currency} 积分` : "，待领奖励检查完毕"}${task.id === "star" ? "，已模拟取消 Star" : ""}`,
-        "success",
-      );
-      if (nextId) setRun({ ...run, index: run.index + 1 });
-      else {
+    const timer = setInterval(async () => {
+      try {
+        const detail = await api.getRun(run.runId);
+        if (detail.status === "running") return;
         setRun(null);
-        notify("本次任务演示已完成，积分与日志已更新");
+        setTaskSets((current) => ({
+          ...current,
+          [run.accountId]: (current[run.accountId] || []).map((task) =>
+            task.status === "running" ? { ...task, status: "pending" } : task,
+          ),
+        }));
+        for (const line of detail.log.slice(-40))
+          addLog(line.message, line.level === "error" ? "warning" : line.level === "info" ? "info" : "success");
+        addLog(
+          detail.status === "ok"
+            ? `${detail.username ?? "账号"} · ${detail.mode === "full" ? "全部任务" : "日常任务"}执行完成${detail.summary ? `，${detail.summary}` : ""}`
+            : `执行失败：${detail.summary ?? "未知错误"}`,
+          detail.status === "ok" ? "success" : "warning",
+        );
+        notify(detail.status === "ok" ? "任务执行完成" : "执行失败，详见运行日志");
+        void loadTasks(run.accountId);
+        void refreshAccountStatus(run.accountId);
+        void loadServerState({ silent: true });
+      } catch {
+        /* 轮询失败下个周期重试 */
       }
-    }, 1100);
-    return () => clearTimeout(timer);
-  }, [run, addLog, notify]);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [run, addLog, notify, loadTasks, refreshAccountStatus, loadServerState]);
 
   function navigate(target: Page) {
     window.location.hash = `/${target}`;
     setMobileNav(false);
   }
-  function startRun(ids: string[]) {
+  async function startRun(ids: string[]) {
     if (isRunning) return;
     if (activeAccount.status !== "online") {
       setDialog({ type: "login", accountId: activeId });
@@ -214,88 +361,129 @@ export default function App() {
       notify("所选任务均已完成，明天再来继续积累");
       return;
     }
-    setTaskSets((current) => ({
-      ...current,
-      [activeId]: current[activeId].map((task) =>
-        task.id === pending[0] ? { ...task, status: "running" } : task,
-      ),
-    }));
-    setRun({ accountId: activeId, ids: pending, index: 0 });
-    addLog(`${activeAccount.name} · 开始模拟执行 ${pending.length} 项任务`);
+    // 引擎按审批过的链路执行（幂等，已完成的步骤自动跳过）；
+    // 所选任务里含一次性任务时用 full 模式，否则日常模式。
+    const mode: "daily" | "full" = pending.some((id) =>
+      tasks.find((task) => task.id === id && task.category === "once"),
+    )
+      ? "full"
+      : "daily";
+    try {
+      const { run_id } = await api.startRun(activeId, mode);
+      setTaskSets((current) => ({
+        ...current,
+        [activeId]: (current[activeId] || []).map((task) =>
+          pending.includes(task.id) ? { ...task, status: "running" } : task,
+        ),
+      }));
+      setRun({ runId: run_id, accountId: activeId, mode });
+      addLog(
+        `${activeAccount.name} · 已提交服务端${mode === "full" ? "全部任务" : "日常任务"}（${pending.length} 项待执行，引擎按链路幂等处理）`,
+      );
+    } catch (error) {
+      notify(`提交失败：${(error as Error).message}`);
+    }
   }
   function stopRun() {
     if (!run) return;
+    // 服务端线程无法安全中断，仅解除 UI 跟踪；引擎会把当前链路跑完（幂等）。
     setTaskSets((current) => ({
       ...current,
-      [run.accountId]: current[run.accountId].map((task) =>
+      [run.accountId]: (current[run.accountId] || []).map((task) =>
         task.status === "running" ? { ...task, status: "pending" } : task,
       ),
     }));
     setRun(null);
-    addLog("任务演示已停止，未完成任务可继续执行", "warning");
-    notify("已停止，已完成的任务进度已保留");
+    addLog("已停止跟踪本次执行；服务端任务将在后台完成（引擎幂等，不重复计分）", "warning");
+    notify("已解除跟踪，服务端任务将在后台完成");
   }
   function saveSchedule(value: Schedule) {
-    setSchedule(value);
-    setDialog(null);
-    notify("定时计划已保存到本次演示");
-    addLog(
-      `演示计划已更新：${value.time} · ${value.mode === "daily" ? "日常任务" : "全部任务"}`,
-    );
+    void api
+      .saveSchedule({
+        enabled: value.enabled,
+        time: value.time,
+        weekdays: value.days,
+        mode: value.mode,
+        account_id: value.account,
+      })
+      .then(() => {
+        setSchedule(value);
+        setDialog(null);
+        notify("定时计划已保存到服务端");
+        addLog(
+          `定时计划已更新：${value.time} · ${value.mode === "daily" ? "日常任务" : "全部任务"}`,
+        );
+      })
+      .catch((error) => notify(`保存失败：${(error as Error).message}`));
   }
-  function loginComplete(name: string) {
-    // 只变更虚构账号的展示状态。新增账号从零进度开始，刷新登录保留原任务与积分。
-    if (dialog?.type !== "login") return;
-    if (dialog.accountId) {
-      setAccounts((current) =>
-        current.map((account) =>
-          account.id === dialog.accountId
-            ? { ...account, status: "online" }
-            : account,
-        ),
-      );
-      addLog("账号登录状态已刷新（模拟）", "success");
-    } else {
-      const id = demoId();
-      setAccounts((current) => [
-        ...current,
-        {
-          id,
-          name: name || "新的工作空间",
-          handle: `demo_${current.length + 1}`,
-          color: "purple",
-          status: "online",
-          proxy: "direct",
-          points: 0,
-        },
-      ]);
-      setTaskSets((current) => ({
-        ...current,
-        [id]: initialTasks.map((task) => ({ ...task, status: "pending" })),
-      }));
-      addLog(`已添加演示账号：${name || "新的工作空间"}`, "success");
+  async function importAccount(
+    tokens: { access_token: string; refresh_token: string },
+    note: string,
+  ) {
+    try {
+      const account = await api.addAccount({
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        note,
+      });
+      await loadServerState({ silent: true });
+      setActiveId(account.id);
+      setDialog(null);
+      notify(`账号 ${account.username} 已导入并校验通过`);
+      addLog(`已导入账号 ${account.username}（登录态校验通过）`, "success");
+    } catch (error) {
+      notify(`导入失败：${(error as Error).message}`);
     }
-    setDialog(null);
-    notify("登录演示成功，账号状态已更新");
+  }
+  async function refreshLogin(accountId: string, tokens: {
+    access_token: string;
+    refresh_token: string;
+  }) {
+    // 刷新登录 = 用新 token 覆盖对应账号：先移除旧的占位说明，实际以导入校验为准。
+    const target = accounts.find((account) => account.id === accountId);
+    if (!target) return;
+    try {
+      await api.removeAccount(accountId);
+      await importAccount(tokens, target.name);
+    } catch (error) {
+      notify(`刷新失败：${(error as Error).message}`);
+    }
   }
   function testProxy(id: string) {
-    // 延迟是固定的演示值，计时器仅呈现检测中的视觉状态，不建立网络连接。
     if (testingProxy) return;
     setTestingProxy(id);
-    proxyTimer.current = setTimeout(() => {
+    const finish = () => setTestingProxy(null);
+    if (id === "all") {
+      // 逐个测已启用节点，避免并发触发风控
+      void (async () => {
+        for (const proxy of proxies.filter((item) => item.enabled)) {
+          await testProxyInner(proxy.id);
+        }
+        finish();
+        notify("连通性检测完成");
+      })();
+    } else {
+      void testProxyInner(id).then(() => {
+        finish();
+      });
+    }
+  }
+  async function testProxyInner(id: string) {
+    try {
+      const result = await api.testProxy(id);
       setProxies((current) =>
         current.map((proxy) =>
-          proxy.enabled && (id === "all" || proxy.id === id)
-            ? {
-                ...proxy,
-                latency: proxy.id === "p1" ? 42 : proxy.id === "p2" ? 86 : 18,
-              }
+          proxy.id === id
+            ? { ...proxy, latency: result.latency_ms ?? null }
             : proxy,
         ),
       );
-      setTestingProxy(null);
-      notify("模拟连通性检测完成，未发起网络请求");
-    }, 900);
+      if (result.ok)
+        addLog(`代理节点连通性正常（${result.latency_ms}ms，WAF 放行）`, "success");
+      else addLog(`代理节点不通：${result.error ?? `HTTP ${result.status}`}`, "warning");
+    } catch (error) {
+      addLog(`代理检测失败：${(error as Error).message}`, "warning");
+    }
   }
   function exportLogs() {
     // 将当前筛选结果生成浏览器内存文件，下载后释放对象 URL，不写入服务器日志。
@@ -614,7 +802,7 @@ export default function App() {
                     {isRunning ? (
                       <button className="button primary" onClick={stopRun}>
                         <Icon name="pause" size={15} />
-                        停止执行 · {run.index + 1}/{run.ids.length}
+                        服务端执行中 · {run.mode === "full" ? "全部" : "日常"}任务
                       </button>
                     ) : (
                       <button
@@ -921,12 +1109,7 @@ export default function App() {
                 <div className="running-banner">
                   <Icon name="loader" className="spin" />
                   <span>
-                    正在演示：
-                    {tasks.find((task) => task.status === "running")?.name}
-                    <small>
-                      {" "}
-                      {run.index + 1}/{run.ids.length}
-                    </small>
+                    服务端执行中（{run.mode === "full" ? "全部任务" : "日常任务"}）
                   </span>
                   <button onClick={stopRun}>停止执行</button>
                 </div>
@@ -1520,10 +1703,21 @@ export default function App() {
       {dialog?.type === "login" && (
         <Modal
           title={dialog.accountId ? "刷新 GitCode 登录" : "连接 GitCode 账号"}
-          subtitle="选择你习惯的方式，继续每一天的积累。"
+          subtitle="登录态导入为真实功能；扫码/短信/密码仅作展示。"
           onClose={() => setDialog(null)}
         >
-          <LoginForm onComplete={loginComplete} refresh={!!dialog.accountId} />
+          <LoginForm
+            onComplete={(name) => {
+              setDialog(null);
+              notify("演示登录完成（非真实账号）");
+              addLog(`演示账号 ${name || "未命名"} 登录（非真实功能）`);
+            }}
+            onImport={importAccount}
+            onRefreshLogin={(tokens) => {
+              if (dialog.accountId) void refreshLogin(dialog.accountId, tokens);
+            }}
+            refresh={!!dialog.accountId}
+          />
         </Modal>
       )}
       {dialog?.type === "schedule" && (
@@ -1549,15 +1743,24 @@ export default function App() {
           <ProxyForm
             proxy={proxies.find((proxy) => proxy.id === dialog.id)}
             onSave={(proxy) => {
-              setProxies((current) =>
-                dialog.id
-                  ? current.map((item) =>
-                      item.id === dialog.id ? proxy : item,
-                    )
-                  : [...current, proxy],
-              );
-              setDialog(null);
-              notify("节点信息已保存到本次演示");
+              void api
+                .addProxy({
+                  name: proxy.region
+                    ? `${proxy.name} · ${proxy.region}`
+                    : proxy.name,
+                  protocol: proxy.protocol,
+                  host: proxy.host,
+                  port: proxy.port,
+                  enabled: proxy.enabled,
+                })
+                .then(() => loadServerState({ silent: true }))
+                .then(() => {
+                  setDialog(null);
+                  notify("节点已保存到服务端");
+                })
+                .catch((error) =>
+                  notify(`保存失败：${(error as Error).message}`),
+                );
             }}
             onCancel={() => setDialog(null)}
           />
@@ -1574,14 +1777,21 @@ export default function App() {
             proxies={proxies}
             isDefault={defaultId === dialog.id}
             onSave={(account, isDefault) => {
-              setAccounts((current) =>
-                current.map((item) =>
-                  item.id === account.id ? account : item,
-                ),
-              );
-              if (isDefault) setDefaultId(account.id);
-              setDialog(null);
-              notify("账号设置已更新");
+              // 展示名即备注；默认账号与代理绑定走服务端。
+              void (async () => {
+                try {
+                  await api.patchAccount(account.id, { note: account.name });
+                  if (isDefault) await api.setDefault(account.id);
+                  const proxyId =
+                    account.proxy === "direct" ? null : account.proxy;
+                  await api.setAccountProxy(account.id, proxyId);
+                  await loadServerState({ silent: true });
+                  setDialog(null);
+                  notify("账号设置已保存到服务端");
+                } catch (error) {
+                  notify(`保存失败：${(error as Error).message}`);
+                }
+              })();
             }}
             onRemove={() =>
               setDialog({ type: "remove-account", id: dialog.id })
@@ -1609,24 +1819,22 @@ export default function App() {
             <button
               className="button danger"
               onClick={() => {
-                const remaining = accounts.filter(
-                  (account) => account.id !== dialog.id,
-                );
-                setAccounts(remaining);
-                if (activeId === dialog.id) setActiveId(remaining[0].id);
-                if (defaultId === dialog.id) setDefaultId(remaining[0].id);
-                if (schedule.account === dialog.id)
-                  setSchedule((current) => ({
-                    ...current,
-                    account: remaining[0].id,
-                  }));
-                setTaskSets((current) =>
-                  Object.fromEntries(
-                    Object.entries(current).filter(([id]) => id !== dialog.id),
-                  ),
-                );
-                setDialog(null);
-                notify("演示账号已移除");
+                void api
+                  .removeAccount(dialog.id)
+                  .then(() => loadServerState({ silent: true }))
+                  .then(() => {
+                    if (activeId === dialog.id) {
+                      const remaining = accounts.filter(
+                        (account) => account.id !== dialog.id,
+                      );
+                      if (remaining[0]) setActiveId(remaining[0].id);
+                    }
+                    setDialog(null);
+                    notify("账号已移除");
+                  })
+                  .catch((error) =>
+                    notify(`移除失败：${(error as Error).message}`),
+                  );
               }}
             >
               确认移除
@@ -1637,7 +1845,7 @@ export default function App() {
       {dialog?.type === "remove-proxy" && (
         <Modal
           title="移除这个代理节点？"
-          subtitle="使用该节点的演示账号将改为直接连接。"
+          subtitle="使用该节点的账号将改为直接连接。"
           onClose={() => setDialog(null)}
         >
           <div className="confirm-content">
@@ -1653,23 +1861,62 @@ export default function App() {
             <button
               className="button danger"
               onClick={() => {
-                setProxies((current) =>
-                  current.filter((proxy) => proxy.id !== dialog.id),
-                );
-                setAccounts((current) =>
-                  current.map((account) =>
-                    account.proxy === dialog.id
-                      ? { ...account, proxy: "direct" }
-                      : account,
-                  ),
-                );
-                setDialog(null);
-                notify("节点已移除，相关账号已改为直接连接");
+                void api
+                  .removeProxy(dialog.id)
+                  .then(() => loadServerState({ silent: true }))
+                  .then(() => {
+                    setDialog(null);
+                    notify("节点已移除，相关账号已改为直接连接");
+                  })
+                  .catch((error) =>
+                    notify(`移除失败：${(error as Error).message}`),
+                  );
               }}
             >
               确认移除
             </button>
           </div>
+        </Modal>
+      )}
+      {dialog?.type === "api-token" && (
+        <Modal
+          title="填写服务端 API Token"
+          subtitle="Token 在服务端启动日志中输出（数据目录 auth.json）。"
+          onClose={() => setDialog(null)}
+        >
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveApiToken();
+            }}
+          >
+            <div className="form-fields">
+              <label className="field">
+                API Token
+                <input
+                  required
+                  type="password"
+                  autoComplete="off"
+                  value={tokenDraft}
+                  onChange={(event) => setTokenDraft(event.target.value)}
+                  placeholder="粘贴服务端输出的 Token"
+                />
+              </label>
+            </div>
+            <div className="form-actions">
+              <button
+                className="button"
+                type="button"
+                onClick={() => setDialog(null)}
+              >
+                稍后再填
+              </button>
+              <button className="button primary" type="submit">
+                保存并连接
+                <Icon name="login" size={16} />
+              </button>
+            </div>
+          </form>
         </Modal>
       )}
       {dialog?.type === "full" && (
@@ -1855,19 +2102,40 @@ function Stat({
 
 function LoginForm({
   onComplete,
+  onImport,
+  onRefreshLogin,
   refresh,
 }: {
   onComplete: (name: string) => void;
+  onImport: (
+    tokens: { access_token: string; refresh_token: string },
+    note: string,
+  ) => Promise<void>;
+  onRefreshLogin: (tokens: {
+    access_token: string;
+    refresh_token: string;
+  }) => void;
   refresh: boolean;
 }) {
-  const [method, setMethod] = useState("qr");
+  const [method, setMethod] = useState("token");
   const [provider, setProvider] = useState("");
   const [qrGeneration, setQrGeneration] = useState(0);
   const [codeSent, setCodeSent] = useState(false);
   const [name, setName] = useState("");
-  // 表单内容只参与浏览器原生校验；不读取、持久化或发送密码、验证码及 token。
+  const [accessToken, setAccessToken] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
+  // 登录态导入是真实功能（服务端校验并入库）；其余页签仍为交互演示。
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (method === "token") {
+      const tokens = {
+        access_token: accessToken.trim(),
+        refresh_token: refreshToken.trim(),
+      };
+      if (refresh) onRefreshLogin(tokens);
+      else void onImport(tokens, name);
+      return;
+    }
     onComplete(name);
   }
   return (
@@ -2037,7 +2305,9 @@ function LoginForm({
                   type="password"
                   autoComplete="off"
                   required
-                  placeholder="填入任意演示文本"
+                  value={accessToken}
+                  onChange={(event) => setAccessToken(event.target.value)}
+                  placeholder="gitcode.com localStorage 的 access_token"
                 />
               </label>
               <label className="field">
@@ -2046,11 +2316,14 @@ function LoginForm({
                   type="password"
                   autoComplete="off"
                   required
-                  placeholder="填入任意演示文本"
+                  value={refreshToken}
+                  onChange={(event) => setRefreshToken(event.target.value)}
+                  placeholder="gitcode.com localStorage 的 refresh_token"
                 />
               </label>
               <span className="form-hint">
-                此处不验证或保存 Token，请勿填写真实凭证。
+                真实导入：服务端会用 Refresh Token 现场校验并轮换保存（60 天有效期，
+                过期需重新导出）。
               </span>
             </div>
           )}
@@ -2059,10 +2332,12 @@ function LoginForm({
             type="submit"
           >
             <Icon name={method === "qr" ? "check" : "login"} size={16} />
-            {method === "qr"
-              ? "模拟扫码成功"
-              : method === "token"
-                ? "模拟导入登录态"
+            {method === "token"
+              ? refresh
+                ? "校验并更新登录态"
+                : "校验并导入账号"
+              : method === "qr"
+                ? "模拟扫码成功"
                 : "模拟登录"}
           </button>
         </form>

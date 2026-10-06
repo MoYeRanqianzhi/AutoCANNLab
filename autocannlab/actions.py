@@ -67,15 +67,19 @@ def visit_cann_community(client: GitCodeClient) -> str:
 
 
 def do_signin(client: GitCodeClient) -> str:
-    """D2：每日签到。签到状态以 sign_status 为准；未签到时尝试 POST /task/1/points。"""
+    """D2：每日签到。POST /uc/api/v1/task/sign-in（2026-10-07 浏览器实测捕获；
+    注意不是 /task/1/points——那会返回 1002 任务未完成）。"""
     status = tasks.sign_status(client)
     if status.get("is_sign_in"):
         return "今日已签到"
-    ok, msg = tasks.claim(client, TASK_SIGNIN)
+    client.post_json("/uc/api/v1/task/sign-in")
     after = tasks.sign_status(client)
     if after.get("is_sign_in"):
-        return "签到成功"
-    return f"签到未生效（claim={ok}, msg={msg}）——签到端点形态待明日复测"
+        idx = after.get("award_index")
+        scores = after.get("scores") or []
+        got = scores[idx] if isinstance(idx, int) and idx < len(scores) else "?"
+        return f"签到成功（+{got} GitCode 积分）"
+    return "签到调用已发出但状态未翻转，需人工核查"
 
 
 def _project_id_by_path(client: GitCodeClient, path: str) -> str | None:

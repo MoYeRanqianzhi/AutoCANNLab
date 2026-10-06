@@ -64,15 +64,28 @@ def _jwt_exp(token: str) -> float | None:
 
 
 class GitCodeClient:
-    def __init__(self, secrets_path=None):
-        self.secrets_path = secrets_path or config.SECRETS_PATH
+    def __init__(self, tokens: dict | None = None, *, proxy_url: str | None = None,
+                 secrets_path=None, on_tokens_refreshed=None):
+        """tokens 为 {access_token, refresh_token, username}；不传时回退到
+        单账号 secrets 文件（本地 CLI 兼容模式）。proxy_url 形如
+        http://user:pass@host:port 或 socks5://host:port，None 直连。
+        on_tokens_refreshed：refresh 轮换后的持久化回调（多账号模式必传，
+        否则新 refresh_token 只存在于内存，进程重启后旧 token 可能已失效）。"""
+        if tokens is not None:
+            self._tokens = dict(tokens)
+            self.secrets_path = None
+        else:
+            self.secrets_path = secrets_path or config.SECRETS_PATH
+            self._tokens = json.loads(self.secrets_path.read_text(encoding="utf-8"))
+        self.proxy_url = proxy_url
+        self._on_tokens_refreshed = on_tokens_refreshed
         self.http = httpx.Client(
             base_url=config.API_BASE,
             headers=COMMON_HEADERS,
             timeout=30.0,
             follow_redirects=True,
+            proxy=proxy_url,
         )
-        self._tokens = json.loads(self.secrets_path.read_text(encoding="utf-8"))
         # WAF 会话 cookie：访问主站时由 CloudWAF 下发（HWWAFSESID/HWWAFSESTIME），
         # API 域名（web-api.gitcode.com）同样受 WAF 检查，需手工附带
         self._waf_cookies: dict[str, str] = {}
@@ -105,9 +118,12 @@ class GitCodeClient:
         return _jwt_exp(self._tokens["refresh_token"])
 
     def _persist_tokens(self) -> None:
-        self.secrets_path.write_text(
-            json.dumps(self._tokens, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        if self.secrets_path is not None:
+            self.secrets_path.write_text(
+                json.dumps(self._tokens, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        elif self._on_tokens_refreshed is not None:
+            self._on_tokens_refreshed(dict(self._tokens))
 
     def prepare(self) -> None:
         """每次运行的入口：领取 WAF cookie + 保证 access_token 新鲜。"""

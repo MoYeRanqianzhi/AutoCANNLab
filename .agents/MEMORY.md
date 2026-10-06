@@ -6,4 +6,3 @@
 - [实施计划](plan/headless-automation.md) — 两种模式（full/daily）设计、开放点、下一步
 - [React UI 原型边界](memory/ui-prototype.md) -- UI 全真实化（2026-10-07），无演示路径
 - [GitCode 登录流程](memory/gitcode-login-flows.md) -- 扫码/短信/密码端点、AES 密码加密、易盾集成
-- [服务器部署](memory/server-deployment.md) -- ssh remote systemd 部署、SSH 隧道访问、双端 token 轮换陷阱

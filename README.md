@@ -3,6 +3,9 @@
 CANNLab 自动获取积分。通过 GitCode 成长中心任务系统与 CANN 积分接口，自动完成
 每日签到、访问 CANN 社区、star/浏览类任务并领取奖励，攒 CANN 积分兑换 NPU 卡时。
 
+> **免责声明**：本项目仅用于学习交流与个人账号的日常任务自动化。请遵守 GitCode
+> 服务条款，仅对自己拥有的账号使用；因使用本项目产生的任何后果由使用者自行承担。
+
 ## Web 控制台（开发构建）
 
 `web/` 是 React + TypeScript + Vite 管理台，接入 `autocannlab server` 的真实数据与执行，
@@ -116,3 +119,7 @@ star 类任务领分后一律取消 star。见 `.agents/memory/risk-policy-and-s
 ## 日志
 
 `logs/YYYY-MM-DD.log`（UTF-8），同时输出到控制台。
+
+## License
+
+[MIT](LICENSE) © 2026 MoYeRanqianzhi

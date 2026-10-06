@@ -40,10 +40,22 @@ metadata:
 
 **领取机制补充（2026-10-06 实测）**：
 
-- `status=1` 不区分「待领取」与「已领取」——已领过的任务同样显示 status=1，不能作为可领取判据。
-- 真实待领取信号：`GET /uc/api/v1/task/total-unclaimed-rewards` 返回的数字；为 0 时无需扫描。
-- **领取窗口有限**：3 月完成的任务（task 56）现已报「已超过可领取次数」——代领必须当天完成当天领。
-- 每日签到（task 1）的 +5 由签到动作本身发放，`POST /task/1/points` 返回 1002「任务未完成」；网页端签到端点尚未探明（明日未签到状态实测）。
+- `status` 字段**不区分**「待领取/已领取」——不能作为可领取判据。
+- 可领取判据：`current_count >= need_count`；重复领取被服务端「已超过可领取次数」拒绝（静默跳过即可）。
+- 领取成功响应为**裸布尔 true**。
+- **领取窗口有限**：当天完成当天领（实测 2 月完成的任务已过期不可领）。
+- 真实待领取总量：`GET /uc/api/v1/task/total-unclaimed-rewards` 直接返回数字；`GET /task/unclaimed` 列表端点登录态下也返回空（不可用）。
+- 每日签到（task 1）的 +5 由签到动作本身发放，`POST /task/1/points` 返回 1002「任务未完成」；网页端签到端点尚未探明。
+- **已实测的判定方式**：下载项目 = 服务端记录 `/{path}/archive/{branch}.zip` 请求；WebIDE = 访问 `/uc/api/v1/sso/saml/loginUrl` 返回的 SSO URL（两者均当天结算为可领取并成功领取）。
+
+**一次性任务端点（2026-10-06 抓包）**：
+
+- 创建令牌：`POST /uc/api/v1/user/{username}/impersonation_tokens`，body `{username,name,expires_at,scopes:[],description}`（scopes 空=全禁）。
+- 搜索 = GET `gitcode.com/search?type=repo&q=` （SSR 即执行）；看码 = GET `/{path}/blob/{branch}/{file}`；下载 = GET `/{path}/archive/{branch}.zip`。
+- WebIDE：`GET /uc/api/v1/sso/saml/loginUrl` → 302 到 devcloud.cn-north-4.huaweicloud.com/codeartside/webide。
+- 模型文件：`GET ai.gitcode.com/hf_mirrors/{model}/resolve/{branch}/{file}`。
+- aihub（Space/Notebook，域名待实测 api-ai.gitcode.com）：Space `POST /aihub/api/v1/space/{id}/start|/pause`、`GET /get_status`；Notebook `POST /aihub/api/v1/notebook`、`PUT /notebook/run_project|/pause`。
+- 模型初体验（84）的在线推理入口**未定位**（镜像页无推理 widget，「使用模型」仅为代码示例菜单）。
 
 **用户规则**：star/关注类任务领分后一律取消（unstar/取关）。结算为服务端自动（1h 内，实测 star 结算约在行为后数分钟的 compile_time 记录），领取与取消之间需轮询 `task?type=4` 确认 current_count 已计。
 

@@ -44,12 +44,13 @@
 
 ## 下一步
 
-1. git init + 骨架（pyproject、.gitignore、包结构）。
-2. client + status 命令，实测 token 链路（只读）。
-3. daily 链路（幂等设计，今天可安全试跑——大部分任务今日已完成会自动跳过，D7 应能领到存量如 task 56 +10）。
-4. full 链路 + 取关。
-5. 明日首次真实 daily 验证 D1-D4 触发判定，回填 memory。
-6. 注册 Windows 计划任务（经用户确认时间）。
+1. ~~git init + 骨架~~ ✓
+2. ~~client + status 命令~~ ✓（WAF 过检方案已实测：bootstrap WAF cookie + 全浏览器头，无需 TLS 伪装）
+3. ~~daily 链路~~ ✓ 今日幂等试跑通过（D1-D4 全部正确跳过已完成项，D7 短路正常）
+4. ~~full 链路 + 取关~~ ✓（取关已执行：浏览器手动取关 + 脚本幂等分支验证通过）
+5. 明日首次真实 daily 验证：D2 签到端点（POST /task/1/points 是否即签到）、D1/D4 触发判定、D3 完整链路（star→结算→领分→unstar）、D7 真实领取。
+6. full 一次性项的端点探明与实现（搜索/看码/下载/令牌/WebIDE：主站 bundle 未含，需抓搜索页与设置页；模型初体验/下载模型/激活Space/Notebook：ai.gitcode.com 独立站需单独抓包）。
+7. 注册 Windows 计划任务（经用户确认时间）。
 
 ## 已知风险
 

@@ -28,8 +28,16 @@ CANNLab（https://gitcode.com/org/cann/cannlab）托管在 gitcode.com（Nuxt SS
 - `score-proxy/api/v1/shop/third-party/goods?scene=cannlab_exchange&type=cann` — 积分兑换商品；`POST .../orders` — 下单兑换。
 - `score-proxy/api/v1/shop/third-party/biz-score/will-expire?score_type=CANN` — 即将过期积分。
 - Star：`POST /api/v2/projects/{id}/star`、`POST /api/v2/projects/{id}/unstar`。
-- 关注：`POST /uc/api/v1/follow`（body）、`DELETE /uc/api/v1/follow`（params）——body/params 具体形态待实施时抓一次真实调用。
+- 关注：`POST /uc/api/v1/follow`（body）、`DELETE /uc/api/v1/follow?unfollowUsername={org}&followType=1`（followType=1 为组织；查询 `GET /follow/hasFollowed?username={me}&otherUsername={org}&followType=1` **直接返回布尔值**）。
+- `GET /uc/api/v1/task/total-unclaimed-rewards` **直接返回数字**（非对象）。
 - `aihub/api/v1/activity/cann/status?competition_id=&resource_type=` — CANN 活动状态。
+
+**CloudWAF 过检**（2026-10-06 实测，httpx 裸请求被 418「访问被拦截」拦截）：
+
+- WAF 做请求头完整性检查 + WAF 会话 cookie 检查，**不做 TLS 指纹检测**（curl 带全头即过）。
+- 必需条件：完整浏览器级头（sec-*/accept 家族、referer、UA 等，见 autocannlab/client.py COMMON_HEADERS）+ `HWWAFSESID`/`HWWAFSESTIME` cookie。
+- WAF cookie 自助获取：GET 主站任意页面（如 /cann）即由 Set-Cookie 下发；web-api 域同样受检，需手工附带（主站 Set-Cookie 无 Domain 属性，不会自动跨到 web-api 子域）。
+- 已实现于 autocannlab/client.py：bootstrap_waf() + 418 自动重试。
 
 **CANNLab 资源模型**（官方改版公告 cann/infrastructure#6）：CPU 环境默认 720 核时，NPU 环境默认 252 卡时（该账号实际值）；积分兑换算力入口 `/org/cann/cannlab/environment` 页「积分兑换」。
 

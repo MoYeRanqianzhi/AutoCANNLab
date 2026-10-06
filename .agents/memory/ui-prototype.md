@@ -1,6 +1,6 @@
 ---
 name: ui-prototype
-description: 修改 React 管理台或准备接入 Python 后端时，先确认 UI 原型与真实自动化的边界
+description: Web 控制台与后端的接入边界：哪些真实、哪些仍是演示
 metadata:
   type: project
   scope: web/ 管理台
@@ -8,13 +8,23 @@ metadata:
   last_verified: 2026-10-07
 ---
 
-`web/` 是独立的交互原型，所有账号、登录方式、代理检测、积分与任务执行均为本地演示。
-其构建、托管方式和页面能力以 [README](../../README.md#ui-交互原型) 为准。
+`web/` 已于 2026-10-07 接入真实后端（`autocannlab/server.py`，Bearer Token 鉴权）。
 
-**Why:** 用户明确要求只负责 UI，不接入真实功能；界面中可操作的按钮不能作为真实自动化已经实现或获得执行授权的证据。
+**真实功能**：账号登录态导入（Refresh Token 现场校验+轮换）、账号备注/默认/暂停/删除、
+代理节点 CRUD 与连通性实测、定时计划保存（内置调度器）、提交 daily/full 执行并跟踪、
+真实任务清单与积分、服务端日志查看。
 
-**How to apply:** 修改页面时保持与真实账号及 Python CLI 隔离。后续接入真实功能需要新的任务范围，并重新核对 [[risk-policy-and-scope]] 和 [[gitcode-task-inventory]]，不能按演示状态推断接口行为。
+**仍为演示（明确标注）**：扫码/短信/密码/OAuth 登录页签（GitCode 登录有易盾验证码，
+无法自动化，添加账号只能走登录态导入）、工作台趋势图（本地演示数据）、任务单选执行
+（引擎按审批链路整链执行，幂等跳过已完成步骤，不做单任务投递）。
 
-**Evidence:** 2026-10-06 用户对 React 静态 UI 原型的明确要求；`web/src/data.ts` 的虚构数据、`web/src/App.tsx` 的本地状态与模拟计时器；生产构建在 Python 静态服务器下通过浏览器交互检查。
+**Why:** 用户要求接入真实功能时重新核对了 [[risk-policy-and-scope]]；演示与真实的边界
+必须在 UI 文案与代码注释里保持诚实，不能让界面按钮暗示未授权的动作。
 
-**Recheck when:** 用户要求接入后端、登录、代理或真实定时执行，或前端增加网络请求和持久化。
+**How to apply:** 改 UI 时维持这条边界；新增界面动作前先在服务端实现并送审；
+「登录态导入」是唯一的新增账号途径。部署形态见 [[server-deployment]]。
+
+**Evidence:** `web/src/api.ts`（唯一 API 客户端）；server.py 端点清单；浏览器实测截图与
+服务器部署验证（2026-10-07）。
+
+**Recheck when:** 服务端新增动作类型、登录方式变化、或 UI 出现无后端支撑的新按钮。

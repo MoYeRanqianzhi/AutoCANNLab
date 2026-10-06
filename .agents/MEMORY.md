@@ -4,3 +4,4 @@
 - [GitCode 任务全量清单](memory/gitcode-task-inventory.md) — CANN/GitCode 两套积分任务、task_id、积分值、结算机制
 - [风险红线与审核流程](memory/risk-policy-and-scope.md) — 赛事报名不做、高危不做、动作清单先审后行、star/关注领分即取消
 - [实施计划](plan/headless-automation.md) — 两种模式（full/daily）设计、开放点、下一步
+- [React UI 原型边界](memory/ui-prototype.md) -- 静态管理台仅作本地演示，界面能力不代表真实功能或执行授权

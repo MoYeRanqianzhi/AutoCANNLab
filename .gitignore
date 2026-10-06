@@ -12,3 +12,13 @@ __pycache__/
 .agents/tmp/
 .playwright-mcp/
 *.png
+
+# 前端依赖、静态构建和浏览器验收产物
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+output/playwright/
+.playwright-cli/
+.worktrees/
+.agents/**/*.local.*
+.agents/*.local.*

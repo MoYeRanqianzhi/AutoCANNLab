@@ -11,7 +11,7 @@ from .client import ApiError, GitCodeClient
 
 log = logging.getLogger(__name__)
 
-AIHUB_BASE = "https://api-ai.gitcode.com"  # aihub API 独立域名（ai.gitcode.com 会 302）
+AIHUB_API = "/aihub/api"  # aihub 接口挂在 web-api.gitcode.com 下（2026-10-06 实测确认）
 
 # 任务 ID（2026-10-06 抓包固化）
 TASK_SEARCH = 2
@@ -140,60 +140,102 @@ def download_model_file(client: GitCodeClient) -> str:
 
 
 def _aihub_get(client: GitCodeClient, path: str, **kwargs):
-    return client.http.get(AIHUB_BASE + path,
-                           headers={"Authorization": f"Bearer {client.access_token}",
-                                    "x-app-channel": "gitcode-fe"},
-                           **kwargs)
+    return client.request("GET", AIHUB_API + path, **kwargs)
 
 
-def _aihub_post(client: GitCodeClient, path: str, body=None):
-    return client.http.post(AIHUB_BASE + path,
-                            json=body if body is not None else {},
-                            headers={"Authorization": f"Bearer {client.access_token}",
-                                     "x-app-channel": "gitcode-fe"})
+def _aihub_send(client: GitCodeClient, method: str, path: str, body=None):
+    return client.request(method, AIHUB_API + path, json=body if body is not None else {})
 
 
 def activate_space(client: GitCodeClient) -> str:
-    """激活 Space：找一个未启动的 Space 并启动。
+    """任务 86 激活Space（+20）：**放弃自动化**。
 
-    注意：会在平台侧启动第三方/自己的 Space 实例（消耗平台算力），仅 full 模式
-    执行一次。api-ai.gitcode.com 域名与 start body 为待实测项，失败时如实记录。
+    实测（2026-10-06）：未启动的第三方 Space 详情页对访客没有激活入口
+    （激活按钮仅作者可见），页面访问也不计入任务（cnt 不变）；自行创建
+    Space 会创建仓库，触碰用户红线（push/建仓库类不做）。损失一次性 +20。
     """
-    if _task_done(client, TASK_SPACE_ACTIVATE):
-        return "任务已完成，跳过"
-    resp = _aihub_get(client, "/aihub/api/v1/space/get_page",
-                      params={"page": 1, "page_size": 10})
-    if resp.status_code != 200:
-        return f"失败: space 列表 HTTP {resp.status_code}（aihub 域名待实测）"
-    data = resp.json().get("data") or {}
-    items = data.get("list") or data.get("content") or []
-    target = None
-    for item in items:
-        status = str(item.get("status", "")).lower()
-        if status in ("0", "stopped", "sleep", "sleeping", "not_started", "pending"):
-            target = item
-            break
-    if target is None:
-        return "列表前 10 个 Space 均在运行中，未执行激活"
-    space_id = target.get("id") or target.get("project_id")
-    resp = _aihub_post(client, f"/aihub/api/v1/space/{space_id}/start")
-    return f"已请求激活 Space {space_id}（HTTP {resp.status_code}，body 待实测校验）"
+    return "放弃（激活仅作者可用，自建 Space 触碰建仓库红线）"
+
+
+def _pick_cpu_flavor_and_image(client: GitCodeClient) -> tuple[str, str] | None:
+    """从 server_list / image_list 选最小 CPU 规格与基础 jupyter 镜像。"""
+    r = _aihub_get(client, "/v1/space/server_list",
+                   params={"ai_device_type": "CPU", "sdk": "notebook", "__s": "aihub"})
+    if r.status_code != 200:
+        raise ApiError(r.status_code, f"server_list: {r.text[:150]}")
+    flavors = (r.json().get("data") or {})
+    flavors = flavors.get("list") or flavors.get("content") or flavors if isinstance(flavors, dict) else flavors
+    if not flavors:
+        raise ApiError(200, "server_list 无 CPU 规格")
+    # 规格按 CPU 数升序取最小（字段名实测为 flavor_id + 描述性文本）
+    def _cpu_of(f):
+        return f.get("cpu") or f.get("flavor") or ""
+    flavor = sorted(flavors, key=_cpu_of)[0]
+
+    r = _aihub_get(client, "/v1/space/image_list",
+                   params={"ai_device": "CPU", "sdk": "notebook", "__s": "aihub"})
+    if r.status_code != 200:
+        raise ApiError(r.status_code, f"image_list: {r.text[:150]}")
+    data = r.json().get("data") or {}
+    images = data.get("list") or data.get("content") or []
+    image = next((i for i in images
+                  if "jupyter" in str(i.get("image_id") or i.get("image") or "")
+                  and "vllm" not in str(i) and "sglang" not in str(i)), None)
+    if image is None and images:
+        image = images[0]
+    if image is None:
+        raise ApiError(200, "image_list 为空")
+    image_id = image.get("image_id") or image.get("image")
+    return flavor.get("flavor_id"), image_id
 
 
 def start_notebook(client: GitCodeClient) -> str:
-    """启动一次 Notebook 实例并暂停（任务要求：新建实例、启动并等待就绪）。
+    """任务 87 Notebook实战（+25）：创建 CPU notebook → 等就绪 → 立即关闭。
 
-    注意：Notebook 消耗本人 CPU 核时配额；启动后会尽快 pause。创建 body 字段
-    未经实测，失败时如实记录不重试（避免反复建实例烧配额）。
+    端点与 body 均为 2026-10-06 浏览器实测捕获；会话有 2 小时硬上限
+    （detail.expire_time），最坏情况消耗 0.5v×2h=1 核时。
     """
     if _task_done(client, TASK_NOTEBOOK):
         return "任务已完成，跳过"
-    resp = _aihub_post(client, "/aihub/api/v1/notebook")
-    if resp.status_code >= 400:
-        return (f"失败: 创建 notebook HTTP {resp.status_code} "
-                f"{resp.text[:120]}（body 字段待实测）")
-    resp2 = _aihub_post(client, "/aihub/api/v1/notebook/pause")
-    return f"notebook 已创建（HTTP {resp.status_code}），pause 请求已发（HTTP {resp2.status_code}）"
+
+    flavor_id, image_id = _pick_cpu_flavor_and_image(client)
+    r = _aihub_send(client, "POST", "/v1/notebook", body={
+        "flavor_id": flavor_id,
+        "image_id": image_id,
+        "disk_size": "50Gi",
+        "calculation_type": 3,  # 3 = CPU（实测）
+        "is_default": 0,
+    })
+    if r.status_code >= 400:
+        return f"失败: 创建 HTTP {r.status_code} {r.text[:150]}"
+    detail = r.json().get("data") or r.json()
+    notebook_id = detail.get("notebook_id")
+    if not notebook_id:
+        return f"失败: 创建响应缺 notebook_id（{str(detail)[:120]}）"
+
+    # 等待启动（实测创建即启动，数秒内可用）
+    import time as _t
+    deadline = _t.time() + 120
+    while _t.time() < deadline:
+        _t.sleep(5)
+        d = _aihub_get(client, "/v1/notebook/detail", params={"__s": "aihub"})
+        if d.status_code == 200:
+            info = d.json().get("data") or {}
+            if info.get("status") not in (0, None) and info.get("access_url"):
+                break  # status 非 0 且有访问 URL = 已就绪
+    # 立即关闭并轮询确认
+    p = _aihub_send(client, "PUT", "/v1/notebook/pause",
+                    body={"notebook_id": notebook_id})
+    for _ in range(6):
+        _t.sleep(5)
+        d = _aihub_get(client, "/v1/notebook/detail", params={"__s": "aihub"})
+        if d.status_code == 200:
+            info = d.json().get("data") or {}
+            if info.get("status") == 2:
+                return (f"notebook {notebook_id} 启动→就绪→已关闭（status=2），"
+                        f"创建 HTTP {r.status_code} pause HTTP {p.status_code}")
+    return (f"notebook {notebook_id} 已创建并已发关闭（HTTP {p.status_code}），"
+            f"但未确认 status=2，请人工核查 gitcode.com/user/{client.username}/notebook")
 
 
 # full 模式的一次性动作清单（顺序执行；标注是否已实现端点）

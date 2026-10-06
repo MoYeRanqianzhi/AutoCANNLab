@@ -22,3 +22,7 @@ output/playwright/
 .worktrees/
 .agents/**/*.local.*
 .agents/*.local.*
+
+# 运行时数据（含 GitCode token 与 API 令牌，严禁入库）
+.agents/data/
+autocannlab.egg-info/

@@ -3592,3 +3592,44 @@ h1 {
     scroll-behavior: auto !important;
   }
 }
+
+/* 最近执行面板（真实服务端运行记录） */
+.recent-runs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.recent-runs li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.recent-runs .run-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.recent-runs .muted {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-runs small {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.status-dot.amber {
+  background: #d98a2b;
+}
+.status-dot.red {
+  background: #c04545;
+}

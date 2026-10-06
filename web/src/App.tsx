@@ -16,7 +16,6 @@ import {
   Select,
   TaskTable,
   Toggle,
-  TrendChart,
 } from "./components";
 import {
   demoId,
@@ -49,7 +48,7 @@ type DialogState =
   | { type: "help" }
   | { type: "api-token" }
   | null;
-// run 现在对应服务端的一次执行（daily/full 链路），不再本地模拟。
+// run 对应服务端的一次执行（daily/full 链路）。
 type Run = { runId: string; accountId: string; mode: "daily" | "full" };
 const statusLabels = {
   online: "登录有效",
@@ -74,7 +73,7 @@ function pageFromHash(): Page {
 }
 
 export default function App() {
-  // 页面共享同一份会话状态，切换导航不会清空演示；刷新页面则从 data.ts 重新开始。
+  // 页面共享同一份会话状态；数据来自服务端，刷新后重新拉取。
   // 账号凭证不进入这些状态，任务列表按账号隔离，默认标记与当前浏览账号分别管理。
   const [page, setPage] = useState<Page>(pageFromHash);
   const [mobileNav, setMobileNav] = useState(false);
@@ -103,12 +102,24 @@ export default function App() {
   const [accountQuery, setAccountQuery] = useState("");
   const [logQuery, setLogQuery] = useState("");
   const [logLevel, setLogLevel] = useState("all");
-  const [period, setPeriod] = useState<"week" | "month">("week");
   const [testingProxy, setTestingProxy] = useState<string | null>(null);
   const [apiOffline, setApiOffline] = useState(false);
+  const [recentRuns, setRecentRuns] = useState<
+    { id: string; username: string | null; mode: string; status: string; started_at: string | null; summary: string | null }[]
+  >([]);
   const [tokenDraft, setTokenDraft] = useState("");
   const proxyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const activeAccount = accounts.find((account) => account.id === activeId)!;
+  const activeAccount =
+    accounts.find((account) => account.id === activeId) ??
+    ({
+      id: "",
+      name: apiOffline ? "未连接服务端" : "尚未导入账号",
+      handle: "—",
+      color: "green",
+      status: "expired",
+      proxy: "direct",
+      points: 0,
+    } as Account);
   const tasks = taskSets[activeId] || [];
   const daily = tasks.filter((task) => task.category === "daily");
   const done = daily.filter((task) => task.status === "done").length;
@@ -153,6 +164,11 @@ export default function App() {
       try {
         const state = await api.state();
         setApiOffline(false);
+        try {
+          setRecentRuns(await api.listRuns());
+        } catch {
+          /* 运行记录拉取失败不阻塞状态加载 */
+        }
         setAccounts(state.accounts.map(mapServerAccount));
         setProxies(
           state.proxies.map((p) => ({
@@ -252,13 +268,13 @@ export default function App() {
     }
   }, []);
 
-  // 初始加载：已有 Token 才拉服务端；未配置时保留演示数据并提示。
+  // 初始加载：已有 Token 才拉服务端，否则提示配置。
   useEffect(() => {
     if (getApiToken()) void loadServerState();
     else setApiOffline(true);
   }, [loadServerState]);
 
-  // 切换账号时拉取真实任务与状态（服务端账号就绪后才拉，避免演示态误请求）。
+  // 切换账号时拉取真实任务与状态（服务端账号就绪后才拉）。
   useEffect(() => {
     const known = accounts.some((account) => account.id === activeId);
     if (!apiOffline && known && getApiToken()) {
@@ -489,7 +505,7 @@ export default function App() {
     // 将当前筛选结果生成浏览器内存文件，下载后释放对象 URL，不写入服务器日志。
     const blob = new Blob(
       [
-        "AutoCANNLab 演示日志\n",
+        "AutoCANNLab 运行日志\n",
         ...filteredLogs.map(
           (log) => `[${log.time}] ${log.level.toUpperCase()} ${log.message}\n`,
         ),
@@ -502,7 +518,7 @@ export default function App() {
     link.download = "autocannlab-demo.log";
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    notify("演示日志已导出");
+    notify("日志已导出");
   }
   const filteredTasks = tasks.filter(
     (task) =>
@@ -594,7 +610,6 @@ export default function App() {
             >
               <Icon name={item.icon} size={19} />
               <span>{item.label}</span>
-              {item.preview && <span className="nav-preview">预览</span>}
               {item.id === "overview" && <span className="nav-active-dot" />}
             </a>
           ))}
@@ -624,7 +639,7 @@ export default function App() {
           </button>
           <div className="sidebar-version">
             <span>
-              <i className="status-dot" /> UI 原型
+              <i className="status-dot" /> 服务端已连接
             </span>
             <span>v0.1.0</span>
           </div>
@@ -658,8 +673,7 @@ export default function App() {
               <kbd>Ctrl K</kbd>
             </button>
             <span className="prototype-badge">
-              <i /> 交互原型
-            </span>
+                    </span>
             <a
               className="icon-button github-link"
               href="https://github.com/MoYeRanQianZhi/AutoCANNLab"
@@ -711,9 +725,6 @@ export default function App() {
                 ) : (
                   navigation.find((item) => item.id === page)?.label
                 )}
-                {(page === "accounts" || page === "proxies") && (
-                  <Badge tone="purple">功能预览</Badge>
-                )}
               </h1>
               <p>{pageDescriptions[page]}</p>
             </div>
@@ -721,7 +732,7 @@ export default function App() {
               {page === "overview" ? (
                 <span className="date-label">
                   <Icon name="calendar" size={16} />
-                  2026 年 10 月 6 日<span>星期二</span>
+                  {new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}
                 </span>
               ) : page === "accounts" ? (
                 <button
@@ -941,7 +952,7 @@ export default function App() {
                   />
                   <div className="panel-foot">
                     <Icon name="refresh" size={13} />
-                    任务每日重置，已完成项目会自动跳过<span>示例数据</span>
+                    任务每日重置，已完成项目会自动跳过
                   </div>
                 </section>
                 <section className="panel schedule-panel">
@@ -980,28 +991,39 @@ export default function App() {
                 <section className="panel trend-panel">
                   <div className="panel-heading">
                     <h2>
-                      积分小记 <span className="muted small">CANN</span>
+                      最近执行 <span className="muted small">服务端运行记录</span>
                     </h2>
-                    <div className="segmented tiny">
-                      <button
-                        className={period === "week" ? "selected" : ""}
-                        onClick={() => setPeriod("week")}
-                      >
-                        近 7 天
-                      </button>
-                      <button
-                        className={period === "month" ? "selected" : ""}
-                        onClick={() => setPeriod("month")}
-                      >
-                        近 30 天
-                      </button>
-                    </div>
+                    <button
+                      className="text-button"
+                      onClick={() => void loadServerState({ silent: true })}
+                    >
+                      <Icon name="refresh" size={14} />
+                      刷新
+                    </button>
                   </div>
-                  <div className="trend-total">
-                    +{period === "week" ? "70" : "300"}
-                    <span>稳稳积累，慢慢发光</span>
-                  </div>
-                  <TrendChart period={period} />
+                  {recentRuns.length === 0 ? (
+                    <p className="muted">还没有执行记录，提交一次日常任务试试。</p>
+                  ) : (
+                    <ul className="recent-runs">
+                      {recentRuns.slice(0, 5).map((item) => (
+                        <li key={item.id}>
+                          <i
+                            className={`status-dot ${item.status === "ok" ? "" : item.status === "running" ? "amber" : "red"}`}
+                          />
+                          <span className="run-name">
+                            {item.username ?? "账号"} ·{" "}
+                            {item.mode === "full" ? "全部任务" : "日常任务"}
+                          </span>
+                          <span className="muted small">
+                            {item.status === "running"
+                              ? "执行中"
+                              : (item.summary ?? (item.status === "ok" ? "完成" : "失败"))}
+                          </span>
+                          <small>{item.started_at?.replace("T", " ") ?? ""}</small>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </section>
                 <section className="panel activity-panel">
                   <div className="panel-heading">
@@ -1157,7 +1179,7 @@ export default function App() {
                 )}
                 <div className="panel-foot">
                   <Icon name="shield" size={14} />
-                  全部任务包含日常与一次性任务的交互演示
+                  全部任务包含日常任务与一次性任务，引擎幂等执行
                   <span>共 {filteredTasks.length} 项</span>
                 </div>
               </section>
@@ -1231,8 +1253,7 @@ export default function App() {
                   </span>
                   <h2>下一次，准时见</h2>
                   <p>{nextSchedule(schedule)}</p>
-                  <span>以演示日期 10 月 6 日 09:00 推算</span>
-                  <div className="mini-timeline">
+                                    <div className="mini-timeline">
                     <div>
                       <i />
                       <span>检查账号登录状态</span>
@@ -1250,7 +1271,7 @@ export default function App() {
                 <div className="inline-note">
                   <Icon name="help" size={19} />
                   <p>
-                    计划设置为界面预览，保存仅在本次页面会话内生效，不会创建后台定时任务。
+                    计划保存到服务端，由内置调度器在到点时自动触发（服务运行期间生效）。
                   </p>
                 </div>
               </div>
@@ -1264,10 +1285,9 @@ export default function App() {
                 <div>
                   <strong>多账号，让管理更从容</strong>
                   <p>
-                    预先体验账号切换、独立登录状态与代理分配。所有账号均为虚构示例。
+                    每个账号独立登录态与代理，积分分开累计；添加账号请使用登录态导入。
                   </p>
                 </div>
-                <Badge tone="purple">规划中</Badge>
               </div>
               <div className="section-toolbar">
                 <span>
@@ -1361,7 +1381,7 @@ export default function App() {
                           size={14}
                         />
                         {account.status === "online"
-                          ? "登录状态正常 · 示例有效期 23 小时"
+                          ? "登录状态正常 · Refresh Token 轮换续期"
                           : account.status === "expired"
                             ? "登录已过期，请刷新后继续任务"
                             : "已暂停参与任务，可随时恢复"}
@@ -1421,10 +1441,9 @@ export default function App() {
                   <strong>连接，由你安排</strong>
                   <p>
                     管理 HTTP / SOCKS5
-                    节点，为每个账号指定连接。延迟与连通性均为模拟结果。
+                    节点，为每个账号指定连接。延迟与连通性为服务端实测结果。
                   </p>
                 </div>
-                <Badge tone="purple">规划中</Badge>
               </div>
               <div className="proxy-stats">
                 <div>
@@ -1465,7 +1484,7 @@ export default function App() {
               <section className="panel proxy-list">
                 <div className="panel-heading">
                   <h2>我的节点</h2>
-                  <span className="muted small">示例网络环境</span>
+                  <span className="muted small">网络环境</span>
                 </div>
                 {proxies.length ? (
                   proxies.map((proxy) => (
@@ -1502,7 +1521,7 @@ export default function App() {
                               : `${proxy.latency} ms`
                             : "已停用"}
                         </strong>
-                        <small>{proxy.enabled ? "示例延迟" : "等待启用"}</small>
+                        <small>{proxy.enabled ? "实测延迟" : "等待启用"}</small>
                       </div>
                       <div className="proxy-assigned">
                         <Icon name="users" size={15} />
@@ -1573,7 +1592,7 @@ export default function App() {
                 ) : (
                   <Empty
                     title="还没有代理节点"
-                    description="添加一个节点，即可预览账号与网络分配。"
+                    description="添加节点后可在账号设置中为账号分配连接。"
                   />
                 )}
               </section>
@@ -1601,7 +1620,7 @@ export default function App() {
             <>
               <div className="log-summary">
                 <span className="status-dot" />
-                演示运行记录<span>共 {logs.length} 条事件</span>
+                运行记录<span>共 {logs.length} 条事件</span>
                 <Badge>本次会话</Badge>
               </div>
               <section className="panel">
@@ -1669,8 +1688,7 @@ export default function App() {
                 </div>
                 <div className="panel-foot">
                   <Icon name="logs" size={14} />
-                  刷新页面将恢复初始演示记录
-                  <span>{filteredLogs.length} 条记录</span>
+                                    <span>{filteredLogs.length} 条记录</span>
                 </div>
               </section>
             </>
@@ -1683,7 +1701,7 @@ export default function App() {
             </span>
             <span>
               <i className="small-dot" />
-              示例数据 · 所有操作仅作交互演示
+              数据来自服务端 · 全部操作真实生效
             </span>
           </footer>
         </main>
@@ -1707,11 +1725,6 @@ export default function App() {
           onClose={() => setDialog(null)}
         >
           <LoginForm
-            onComplete={(name) => {
-              setDialog(null);
-              notify("演示登录完成（非真实账号）");
-              addLog(`演示账号 ${name || "未命名"} 登录（非真实功能）`);
-            }}
             onImport={importAccount}
             onRefreshLogin={(tokens) => {
               if (dialog.accountId) void refreshLogin(dialog.accountId, tokens);
@@ -1737,7 +1750,7 @@ export default function App() {
       {dialog?.type === "proxy" && (
         <Modal
           title={dialog.id ? "编辑代理节点" : "添加代理节点"}
-          subtitle="配置连接信息，预览节点管理体验。"
+          subtitle="配置连接信息，保存后可实测连通性。"
           onClose={() => setDialog(null)}
         >
           <ProxyForm
@@ -1802,8 +1815,8 @@ export default function App() {
       )}
       {dialog?.type === "remove-account" && (
         <Modal
-          title="移除这个演示账号？"
-          subtitle="该账号在本次演示中的任务进度也会移除。"
+          title="移除这个账号？"
+          subtitle="该账号的登录态将从服务端删除，任务进度由 GitCode 侧保留。"
           onClose={() => setDialog(null)}
         >
           <div className="confirm-content">
@@ -1931,7 +1944,7 @@ export default function App() {
             </span>
             <div>
               <strong>{pendingCount} 项待执行</strong>
-              <p>{activeAccount.name} · 按顺序模拟执行</p>
+              <p>{activeAccount.name} · 引擎按链路执行，幂等跳过已完成</p>
             </div>
           </div>
           <div className="full-details">
@@ -1961,7 +1974,7 @@ export default function App() {
           </div>
           <p className="form-note">
             <Icon name="help" size={15} />
-            这是本地交互演示，不会执行 GitCode 操作。
+            执行在服务端进行，任务清单与积分实时来自 GitCode。
           </p>
           <div className="form-actions">
             <button className="button" onClick={() => setDialog(null)}>
@@ -2012,17 +2025,17 @@ export default function App() {
               {
                 icon: "play",
                 title: "从工作台开始",
-                text: "执行日常或全部任务，观察进度、积分和运行记录的变化。",
+                text: "提交日常或全部任务到服务端执行，进度、积分与运行记录实时同步。",
               },
               {
                 icon: "calendar",
                 title: "安排你的节奏",
-                text: "选择每日时间、重复日期与执行账号，预览定时计划。",
+                text: "选择每日时间、重复日期与执行账号，保存后由服务端调度器自动触发。",
               },
               {
                 icon: "users",
                 title: "提前探索更多可能",
-                text: "添加多个演示账号、体验不同登录方式，并为账号分配代理节点。",
+                text: "导入多个账号的登录态（Refresh Token），为每个账号分配代理与备注。",
               },
             ].map((item) => (
               <div key={item.icon}>
@@ -2039,8 +2052,8 @@ export default function App() {
           <div className="inline-note">
             <Icon name="help" size={19} />
             <p>
-              当前为独立 UI
-              原型。数据为虚构示例，操作仅在本地模拟，刷新页面即可恢复初始状态。
+              数据来自服务端（GitCode 实时接口）；执行引擎按审定链路幂等运行，
+              已完成的任务自动跳过。
             </p>
           </div>
           <button
@@ -2101,12 +2114,10 @@ function Stat({
 }
 
 function LoginForm({
-  onComplete,
   onImport,
   onRefreshLogin,
   refresh,
 }: {
-  onComplete: (name: string) => void;
   onImport: (
     tokens: { access_token: string; refresh_token: string },
     note: string,
@@ -2117,246 +2128,77 @@ function LoginForm({
   }) => void;
   refresh: boolean;
 }) {
-  const [method, setMethod] = useState("token");
-  const [provider, setProvider] = useState("");
-  const [qrGeneration, setQrGeneration] = useState(0);
-  const [codeSent, setCodeSent] = useState(false);
   const [name, setName] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [refreshToken, setRefreshToken] = useState("");
-  // 登录态导入是真实功能（服务端校验并入库）；其余页签仍为交互演示。
+  const [busy, setBusy] = useState(false);
+  // 登录态导入是唯一的新增账号途径：服务端用 Refresh Token 现场校验并轮换保存。
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (method === "token") {
-      const tokens = {
-        access_token: accessToken.trim(),
-        refresh_token: refreshToken.trim(),
-      };
-      if (refresh) onRefreshLogin(tokens);
-      else void onImport(tokens, name);
-      return;
+    setBusy(true);
+    const tokens = {
+      access_token: accessToken.trim(),
+      refresh_token: refreshToken.trim(),
+    };
+    const done = () => setBusy(false);
+    if (refresh) {
+      onRefreshLogin(tokens);
+      done();
+    } else {
+      void onImport(tokens, name).finally(done);
     }
-    onComplete(name);
   }
   return (
-    <>
-      <div className="login-demo-note">
-        <Icon name="shield" size={15} />
-        登录交互演示，请使用虚构信息
-      </div>
-      {!refresh && (
-        <label className="field account-name-field">
-          账号备注
+    <form onSubmit={submit}>
+      <div className="form-fields">
+        {!refresh && (
+          <label className="field">
+            账号备注
+            <input
+              value={name}
+              maxLength={30}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="例如：主账号"
+            />
+          </label>
+        )}
+        <label className="field">
+          Access Token
           <input
-            value={name}
-            maxLength={30}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="例如：我的工作空间"
+            type="password"
+            autoComplete="off"
+            required
+            value={accessToken}
+            onChange={(event) => setAccessToken(event.target.value)}
+            placeholder="gitcode.com localStorage 的 access_token"
           />
         </label>
-      )}
-      <div className="login-tabs">
-        {[
-          { id: "qr", label: "扫码登录", icon: "qr" },
-          { id: "phone", label: "短信登录", icon: "phone" },
-          { id: "password", label: "密码登录", icon: "lock" },
-          { id: "token", label: "登录态导入", icon: "code" },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            className={method === tab.id && !provider ? "selected" : ""}
-            onClick={() => {
-              setMethod(tab.id);
-              setProvider("");
-            }}
-          >
-            <Icon name={tab.icon} size={17} />
-            {tab.label}
-          </button>
-        ))}
+        <label className="field">
+          Refresh Token
+          <input
+            type="password"
+            autoComplete="off"
+            required
+            value={refreshToken}
+            onChange={(event) => setRefreshToken(event.target.value)}
+            placeholder="gitcode.com localStorage 的 refresh_token"
+          />
+        </label>
+        <span className="form-hint">
+          获取方式：浏览器登录 gitcode.com → 控制台 → Application → Local Storage，
+          复制 access_token 与 refresh_token。服务端会现场校验并轮换保存（60 天有效期，
+          过期后重新导出即可）。
+        </span>
       </div>
-      {provider ? (
-        <div className="oauth-panel">
-          <span
-            className={`provider-logo ${provider === "CSDN" ? "csdn" : "huawei"}`}
-          >
-            {provider === "CSDN" ? "C" : "H"}
-          </span>
-          <h3>使用 {provider} 账号登录</h3>
-          <p>授权页面交互预览，不会跳转到真实平台。</p>
-          <button
-            className="button primary full-width"
-            onClick={() => onComplete(name)}
-          >
-            模拟授权成功
-            <Icon name="arrow" size={16} />
-          </button>
-          <button className="text-button" onClick={() => setProvider("")}>
-            返回其他登录方式
-          </button>
-        </div>
-      ) : (
-        <form onSubmit={submit} key={method}>
-          {method === "qr" && (
-            <div className="qr-panel">
-              <div className="demo-qr" aria-label="演示二维码图案，不可扫描">
-                <div className="qr-pattern">
-                  {Array.from({ length: 121 }, (_, index) => (
-                    <i
-                      key={index}
-                      className={
-                        (index * 7 +
-                          Math.floor(index / 11) * 3 +
-                          qrGeneration) %
-                          5 <
-                        3
-                          ? "filled"
-                          : ""
-                      }
-                    />
-                  ))}
-                </div>
-                <span className="qr-finder top-left" />
-                <span className="qr-finder top-right" />
-                <span className="qr-finder bottom-left" />
-                <div className="qr-center">
-                  <Logo compact />
-                </div>
-              </div>
-              <strong>使用 GitCode 小程序扫码</strong>
-              <p>演示区域 · 不可扫描</p>
-              <button
-                type="button"
-                className="text-button"
-                onClick={() => setQrGeneration((value) => value + 1)}
-              >
-                <Icon name="refresh" size={14} />
-                {qrGeneration ? "演示码已刷新，再次刷新" : "刷新演示码"}
-              </button>
-            </div>
-          )}
-          {method === "phone" && (
-            <div className="form-fields">
-              <label className="field">
-                手机号码
-                <div className="phone-input">
-                  <span>+86</span>
-                  <input
-                    type="tel"
-                    pattern="1[0-9]{10}"
-                    maxLength={11}
-                    required
-                    placeholder="请输入 11 位演示手机号"
-                  />
-                </div>
-              </label>
-              <label className="field">
-                短信验证码
-                <div className="code-input">
-                  <input
-                    inputMode="numeric"
-                    pattern="[0-9]{6}"
-                    maxLength={6}
-                    required
-                    placeholder="请输入演示码"
-                  />
-                  <button type="button" onClick={() => setCodeSent(true)}>
-                    {codeSent ? "演示码：123456" : "获取演示验证码"}
-                  </button>
-                </div>
-              </label>
-              {codeSent && (
-                <span className="form-hint">
-                  未发送短信，输入 123456 体验登录。
-                </span>
-              )}
-            </div>
-          )}
-          {method === "password" && (
-            <div className="form-fields">
-              <label className="field">
-                手机号 / 邮箱 / 用户名
-                <input
-                  required
-                  autoComplete="off"
-                  placeholder="请输入演示用户名"
-                />
-              </label>
-              <label className="field">
-                密码
-                <input
-                  required
-                  type="password"
-                  autoComplete="off"
-                  minLength={6}
-                  placeholder="任意 6 位以上演示密码"
-                />
-              </label>
-              <span className="form-hint">
-                密码仅用于表单展示，不会保存或发送。
-              </span>
-            </div>
-          )}
-          {method === "token" && (
-            <div className="form-fields">
-              <label className="field">
-                Access Token
-                <input
-                  type="password"
-                  autoComplete="off"
-                  required
-                  value={accessToken}
-                  onChange={(event) => setAccessToken(event.target.value)}
-                  placeholder="gitcode.com localStorage 的 access_token"
-                />
-              </label>
-              <label className="field">
-                Refresh Token
-                <input
-                  type="password"
-                  autoComplete="off"
-                  required
-                  value={refreshToken}
-                  onChange={(event) => setRefreshToken(event.target.value)}
-                  placeholder="gitcode.com localStorage 的 refresh_token"
-                />
-              </label>
-              <span className="form-hint">
-                真实导入：服务端会用 Refresh Token 现场校验并轮换保存（60 天有效期，
-                过期需重新导出）。
-              </span>
-            </div>
-          )}
-          <button
-            className="button primary full-width login-submit"
-            type="submit"
-          >
-            <Icon name={method === "qr" ? "check" : "login"} size={16} />
-            {method === "token"
-              ? refresh
-                ? "校验并更新登录态"
-                : "校验并导入账号"
-              : method === "qr"
-                ? "模拟扫码成功"
-                : "模拟登录"}
-          </button>
-        </form>
-      )}
-      <div className="oauth-divider">
-        <span>其他登录方式</span>
-      </div>
-      <div className="oauth-buttons">
-        <button onClick={() => setProvider("CSDN")}>
-          <span className="provider-logo csdn">C</span>CSDN
-        </button>
-        <button onClick={() => setProvider("华为")}>
-          <span className="provider-logo huawei">H</span>华为账号
-        </button>
-      </div>
-      <p className="login-footer">
-        登录方式为原型展示，实际支持范围以 GitCode 为准
-      </p>
-    </>
+      <button
+        className="button primary full-width login-submit"
+        type="submit"
+        disabled={busy}
+      >
+        <Icon name="login" size={16} />
+        {busy ? "校验中…" : refresh ? "校验并更新登录态" : "校验并导入账号"}
+      </button>
+    </form>
   );
 }
 
@@ -2490,7 +2332,7 @@ function ScheduleForm({
       </div>
       <p className="form-note">
         <Icon name="help" size={15} />
-        仅保存演示设置，不会创建真实定时任务。
+        计划保存到服务端，由内置调度器在到点时自动触发。
       </p>
       <div className="form-actions">
         <button className="button" type="button" onClick={onCancel}>
@@ -2680,7 +2522,7 @@ function AccountForm({
         <Avatar account={account} />
         <div>
           <strong>@{account.handle}</strong>
-          <p>GitCode 演示账号</p>
+          <p>GitCode 账号</p>
         </div>
       </div>
       <div className="form-fields">
@@ -2759,7 +2601,7 @@ function AccountForm({
           <Icon name="check" size={16} />
         </button>
       </div>
-      {!canRemove && <p className="form-hint">保留至少一个演示账号。</p>}
+      {!canRemove && <p className="form-hint">保留至少一个账号。</p>}
     </form>
   );
 }

@@ -66,7 +66,49 @@ refresh_token 每次运行后自动轮换回写；约 60 天后需重新人工�
 python -m autocannlab status   # 只查询：签到状态、CANN积分、算力配额、token 有效期
 python -m autocannlab daily    # 日常：访问CANN社区、签到、star→领分→取消star、浏览推荐、扫表代领
 python -m autocannlab full     # 首次：daily + 已批准的一次性任务（取关 CANN 组织等）
+python -m autocannlab server   # 管理 API + Web 控制台（多账号/代理/定时计划）
 ```
+
+## 服务器部署（推荐）
+
+主力运行方式：Linux 服务器 + systemd 常驻，内置调度器按计划自动执行。
+
+```bash
+# 服务器上（Ubuntu 22.04+，需 python3.12-venv）
+cd /opt/autocannlab
+python3 -m venv .venv && .venv/bin/pip install -e .
+sudo tee /etc/systemd/system/autocannlab.service <<'EOF'
+[Unit]
+Description=AutoCANNLab management API
+After=network-online.target
+[Service]
+WorkingDirectory=/opt/autocannlab
+Environment=AUTOCANNLAB_DATA_DIR=/opt/autocannlab/data
+ExecStart=/opt/autocannlab/.venv/bin/python -m autocannlab.server --host 0.0.0.0 --port 8766
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl enable --now autocannlab
+# API Token 在数据目录 data/auth.json（也在服务启动日志输出），访问 Web 控制台时填入
+```
+
+安全提示：服务无 HTTPS，Bearer Token 是唯一防线。公网部署建议改 `--host 127.0.0.1`
+并经 SSH 隧道（`ssh -L 8766:127.0.0.1:8766 <server>`）访问。
+
+## Web 控制台
+
+`python -m autocannlab server` 后打开 `http://<host>:8766`：
+
+- 工作台/任务中心：真实任务清单与积分、提交日常/全量执行（引擎幂等，串行执行）
+- 账号管理：登录态导入（Refresh Token 现场校验、60 天轮换）、备注、代理绑定、暂停/默认
+- 代理节点：HTTP/SOCKS5，连通性实测（WAF 放行 + 延迟）
+- 定时计划：每日 HH:MM + 星期几 + 模式（日常/全部），内置调度器自动触发
+- 运行日志：服务端真实日志
+
+扫码/短信/密码登录页签仅为展示（GitCode 登录有易盾验证码，无法自动化），
+添加账号请用「登录态导入」。
 
 ## 动作范围（2026-10-06 用户审定）
 

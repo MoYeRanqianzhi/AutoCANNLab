@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -22,6 +22,7 @@ import {
   ExternalLink,
   FileText,
   Gift,
+  Github,
   Globe2,
   Layers3,
   LayoutDashboard,
@@ -79,6 +80,7 @@ const icons: Record<string, LucideIcon> = {
   more: Ellipsis,
   external: ExternalLink,
   gift: Gift,
+  github: Github,
   globe: Globe2,
   layers: Layers3,
   loader: LoaderCircle,
@@ -189,6 +191,191 @@ export function Toggle({
     </button>
   );
 }
+
+// 使用浏览器顶层 popover 绘制菜单，避免被卡片的 overflow 或原生 dialog 裁剪。
+// 焦点始终留在 combobox，方向键只移动候选项，Enter 确认，Escape/Tab 取消展开。
+export function Select({
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  options: { value: string; label: string; disabled?: boolean }[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const id = useId();
+  const trigger = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const typed = useRef({ text: "", time: 0 });
+  const selectedIndex = options.findIndex((option) => option.value === value);
+  const enabledIndices = options.flatMap((option, index) =>
+    option.disabled ? [] : [index],
+  );
+
+  function positionMenu() {
+    const rect = trigger.current!.getBoundingClientRect();
+    const width = Math.min(Math.max(rect.width, 220), window.innerWidth - 24);
+    const below = window.innerHeight - rect.bottom - 18;
+    const above = rect.top - 18;
+    const desiredHeight = Math.min(options.length * 42 + 12, 264);
+    const upward = below < desiredHeight && above > below;
+    Object.assign(menu.current!.style, {
+      width: `${width}px`,
+      left: `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`,
+      top: upward ? "auto" : `${rect.bottom + 6}px`,
+      bottom: upward ? `${window.innerHeight - rect.top + 6}px` : "auto",
+      maxHeight: `${Math.max(0, Math.min(264, upward ? above : below))}px`,
+    });
+  }
+
+  function showMenu(index = selectedIndex) {
+    setActiveIndex(options[index].disabled ? enabledIndices[0] : index);
+    positionMenu();
+    menu.current!.showPopover();
+    setOpen(true);
+  }
+
+  function closeMenu() {
+    menu.current!.hidePopover();
+    setOpen(false);
+  }
+
+  function choose(index: number) {
+    if (options[index].disabled) return;
+    onChange(options[index].value);
+    closeMenu();
+    trigger.current!.focus();
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    // 弹窗滚动、视口变化时继续跟随触发按钮；列表本身的滚动不改变选中值。
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
+  });
+  useEffect(() => {
+    if (open)
+      menu.current!.children[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [open, activeIndex]);
+
+  return (
+    <div className="select-control">
+      <button
+        ref={trigger}
+        type="button"
+        role="combobox"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={id}
+        aria-activedescendant={open ? `${id}-${activeIndex}` : undefined}
+        disabled={disabled}
+        className="select-trigger"
+        onClick={() => (open ? closeMenu() : showMenu())}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && open) {
+            event.preventDefault();
+            event.stopPropagation();
+            closeMenu();
+          } else if (event.key === "Tab") {
+            if (open) closeMenu();
+          } else if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            if (open) choose(activeIndex);
+            else showMenu();
+          } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            if (!open) showMenu();
+            else {
+              const direction = event.key === "ArrowDown" ? 1 : -1;
+              setActiveIndex(
+                enabledIndices[
+                  (enabledIndices.indexOf(activeIndex) +
+                    direction +
+                    enabledIndices.length) %
+                    enabledIndices.length
+                ],
+              );
+            }
+          } else if (event.key === "Home" || event.key === "End") {
+            event.preventDefault();
+            const index =
+              event.key === "Home"
+                ? enabledIndices[0]
+                : enabledIndices[enabledIndices.length - 1];
+            if (open) setActiveIndex(index);
+            else showMenu(index);
+          } else if (
+            event.key.length === 1 &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.altKey
+          ) {
+            const now = Date.now();
+            typed.current = {
+              text:
+                (now - typed.current.time < 700 ? typed.current.text : "") +
+                event.key.toLowerCase(),
+              time: now,
+            };
+            const index = enabledIndices.find((item) =>
+              options[item].label.toLowerCase().startsWith(typed.current.text),
+            );
+            if (index !== undefined) {
+              if (open) setActiveIndex(index);
+              else showMenu(index);
+            }
+          }
+        }}
+      >
+        <span>{options[selectedIndex].label}</span>
+        <Icon name="down" size={15} />
+      </button>
+      <div
+        ref={menu}
+        id={id}
+        popover="auto"
+        role="listbox"
+        aria-label={label}
+        className="select-menu"
+        onToggle={(event) =>
+          setOpen((event.nativeEvent as ToggleEvent).newState === "open")
+        }
+      >
+        {options.map((option, index) => (
+          <div
+            key={option.value}
+            id={`${id}-${index}`}
+            role="option"
+            aria-selected={option.value === value}
+            aria-disabled={option.disabled || undefined}
+            className={`select-option ${activeIndex === index ? "highlighted" : ""}`}
+            onPointerMove={(event) => {
+              if (event.pointerType === "mouse" && !option.disabled)
+                setActiveIndex(index);
+            }}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => choose(index)}
+          >
+            <span>{option.label}</span>
+            {option.value === value && <Icon name="check" size={15} />}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function Empty({
   title,
   description,

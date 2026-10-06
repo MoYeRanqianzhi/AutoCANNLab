@@ -13,6 +13,7 @@ import {
   Logo,
   Modal,
   OrbitArt,
+  Select,
   TaskTable,
   Toggle,
   TrendChart,
@@ -471,6 +472,16 @@ export default function App() {
             <span className="prototype-badge">
               <i /> 交互原型
             </span>
+            <a
+              className="icon-button github-link"
+              href="https://github.com/MoYeRanQianZhi/AutoCANNLab"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="GitHub 开源仓库"
+              title="在 GitHub 查看 AutoCANNLab"
+            >
+              <Icon name="github" size={19} />
+            </a>
             <button
               className="icon-button notification"
               aria-label="查看运行提醒"
@@ -851,18 +862,16 @@ export default function App() {
                 <div>
                   <Avatar account={activeAccount} small />
                   <span>当前执行账号</span>
-                  <select
-                    aria-label="当前执行账号"
+                  <Select
+                    label="当前执行账号"
                     value={activeId}
                     disabled={isRunning}
-                    onChange={(event) => setActiveId(event.target.value)}
-                  >
-                    {accounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setActiveId}
+                    options={accounts.map((account) => ({
+                      value: account.id,
+                      label: account.name,
+                    }))}
+                  />
                 </div>
                 <button
                   className="text-button"
@@ -2183,26 +2192,26 @@ function ScheduleForm({
             </button>
           </div>
         </div>
-        <label className="field">
+        <div className="field">
           执行账号
-          <select
-            aria-label="执行账号"
+          <Select
+            label="执行账号"
             value={draft.account}
-            onChange={(event) =>
+            onChange={(value) =>
               setDraft((current) => ({
                 ...current,
-                account: event.target.value,
+                account: value,
               }))
             }
-          >
-            {accounts.map((account) => (
-              <option value={account.id} key={account.id}>
-                {account.name}
-              </option>
-            ))}
-            <option value="all">全部在线账号</option>
-          </select>
-        </label>
+            options={[
+              ...accounts.map((account) => ({
+                value: account.id,
+                label: account.name,
+              })),
+              { value: "all", label: "全部在线账号" },
+            ]}
+          />
+        </div>
       </div>
       <p className="form-note">
         <Icon name="help" size={15} />
@@ -2412,24 +2421,24 @@ function AccountForm({
             }
           />
         </label>
-        <label className="field">
+        <div className="field">
           网络连接
-          <select
-            aria-label="网络连接"
+          <Select
+            label="网络连接"
             value={draft.proxy}
-            onChange={(event) =>
-              setDraft((current) => ({ ...current, proxy: event.target.value }))
+            onChange={(value) =>
+              setDraft((current) => ({ ...current, proxy: value }))
             }
-          >
-            <option value="direct">直接连接（默认网络）</option>
-            {proxies.map((proxy) => (
-              <option key={proxy.id} value={proxy.id} disabled={!proxy.enabled}>
-                {proxy.name}
-                {proxy.enabled ? "" : "（已停用）"}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={[
+              { value: "direct", label: "直接连接（默认网络）" },
+              ...proxies.map((proxy) => ({
+                value: proxy.id,
+                label: `${proxy.name}${proxy.enabled ? "" : "（已停用）"}`,
+                disabled: !proxy.enabled,
+              })),
+            ]}
+          />
+        </div>
         <label className="checkbox-row">
           <input
             type="checkbox"

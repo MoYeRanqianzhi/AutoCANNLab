@@ -20,14 +20,12 @@ body {
   font-size: 13px;
 }
 button,
-input,
-select {
+input {
   font: inherit;
 }
 button,
 a,
-input,
-select {
+input {
   -webkit-tap-highlight-color: transparent;
 }
 button {
@@ -52,15 +50,13 @@ a {
 }
 button,
 a,
-input,
-select {
+input {
   outline-offset: 4px;
 }
 :focus-visible {
   outline: 2px solid #6b9770;
 }
-input,
-select {
+input {
   min-width: 0;
   color: #35443b;
 }
@@ -1337,6 +1333,103 @@ h1 {
 }
 
 /* 二级页面沿用同一组卡片、表格、状态与表单尺度。 */
+.select-control {
+  min-width: 0;
+  width: 100%;
+}
+.select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid #dfe7d6;
+  border-radius: 9px;
+  background: #fcfdf9;
+  color: #4c6242;
+  text-align: left;
+  font-size: 14px;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.15s;
+}
+.select-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-trigger > svg {
+  color: #8c9f7e;
+  transition: transform 0.15s;
+}
+.select-trigger:hover:not(:disabled) {
+  border-color: #b4caa3;
+  background: #f6f9f0;
+}
+.select-trigger[aria-expanded="true"],
+.select-trigger:focus-visible {
+  border-color: #91b17b;
+  outline: none;
+  box-shadow: 0 0 0 3px #e8f0df;
+}
+.select-trigger[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+/* 菜单由组件计算视口内位置，保留顶层显示与独立滚动，不受父级圆角裁剪。 */
+.select-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid #dce6d3;
+  border-radius: 12px;
+  background: #fff;
+  color: #617752;
+  box-shadow:
+    0 12px 32px #294b251c,
+    0 3px 8px #294b250a;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #c1d2b1 transparent;
+}
+.select-menu:popover-open {
+  animation: enter 0.12s ease-out;
+}
+.select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 10px 11px;
+  border-radius: 7px;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.select-option > span {
+  overflow-wrap: anywhere;
+}
+.select-option[aria-selected="true"] {
+  color: #315d37;
+  background: #edf4e5;
+  font-weight: 500;
+}
+.select-option.highlighted:not([aria-disabled="true"]) {
+  background: #f1f6eb;
+  color: #416534;
+}
+.select-option.highlighted[aria-selected="true"] {
+  background: #e6efdc;
+}
+.select-option[aria-disabled="true"] {
+  color: #b1baa6;
+  cursor: not-allowed;
+}
 .context-bar {
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -1355,12 +1448,14 @@ h1 {
   color: #9aa48c;
   font-size: 13px;
 }
-.context-bar select {
-  border: 0;
-  background: #f7f9f2;
-  padding: 8px 28px 8px 10px;
-  border-radius: 5px;
+.context-bar .select-control {
+  width: 220px;
   max-width: 250px;
+}
+.context-bar .select-trigger {
+  background: #f7f9f2;
+  min-height: 36px;
+  padding: 8px 11px;
   font-size: 13px;
 }
 .task-summary {
@@ -2042,8 +2137,7 @@ h1 {
   font-weight: 500;
   color: #7c8b6c;
 }
-.field > input,
-.field > select {
+.field > input {
   width: 100%;
   min-height: 42px;
   border: 1px solid #dfe7d6;
@@ -2052,8 +2146,7 @@ h1 {
   padding: 10px 12px;
   font-size: 14px;
 }
-.field > input:focus,
-.field > select:focus {
+.field > input:focus {
   border-color: #9eb98a;
   outline: 2px solid #edf3e4;
   outline-offset: 0;
@@ -3141,10 +3234,11 @@ h1 {
   .context-bar > div > span:not(.avatar) {
     font-size: 11px;
   }
-  .context-bar select {
+  .context-bar .select-control {
     max-width: 185px;
     margin-left: auto;
-    padding-right: 10px;
+  }
+  .context-bar .select-trigger {
     font-size: 12px;
   }
   .context-bar > .text-button {
@@ -3373,7 +3467,7 @@ h1 {
     font-size: 10px;
   }
   .field > input,
-  .field > select {
+  .field .select-trigger {
     font-size: 16px;
   }
   .login-tabs button {
@@ -3394,12 +3488,13 @@ h1 {
   }
   .topbar {
     padding: 0 13px;
+    gap: 6px;
   }
   .breadcrumb {
     font-size: 12px;
   }
   .topbar-actions {
-    gap: 7px;
+    gap: 5px;
   }
   .hero h2 {
     font-size: 23px;

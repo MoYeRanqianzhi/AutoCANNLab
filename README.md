@@ -17,9 +17,14 @@ CANN 与 GitCode 积分分开计算。
 | 代理节点 | HTTP/SOCKS5 增删、启停、服务端实测连通性与延迟 |
 | 运行日志 | 服务端真实日志，按级别与关键词过滤、导出 |
 
-添加账号的唯一方式是「登录态导入」：浏览器登录 gitcode.com 后从
-Local Storage 复制 access_token / refresh_token（GitCode 登录有易盾验证码，
-扫码/短信方式无法自动化，故不提供）。
+添加账号支持四种真实登录方式（服务端代理 GitCode 登录流程）：
+
+- **扫码登录**：展示 GitCode 小程序真实二维码，微信扫码确认后自动入库
+- **短信登录**：网易易盾验证后发送短信验证码，输入即登录
+- **密码登录**：密码经服务端按 GitCode 同款算法（AES）加密后提交，需易盾验证
+- **登录态导入**：从浏览器 Local Storage 粘贴 access_token / refresh_token
+
+Refresh Token 有效期 60 天，每次运行自动轮换；过期后在账号卡片点「刷新登录」。
 
 开发（Node.js 20.19+ 或 22.12+）：
 

@@ -2112,7 +2112,7 @@ function LoginForm({
     "loading" | "waiting" | "scanned" | "expired" | "error"
   >("loading");
   useEffect(() => {
-    if (tab !== "qr" || refresh) return;
+    if (tab !== "qr") return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let scene = "";
@@ -2151,7 +2151,7 @@ function LoginForm({
       if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, refresh]);
+  }, [tab]);
 
   async function confirmQr() {
     if (!sceneId) return;

@@ -222,16 +222,11 @@ def run_daily(client: GitCodeClient) -> None:
 
 
 def run_full(client: GitCodeClient) -> None:
-    """首次模式：daily 全量 + 已批准的一次性项。
-
-    一次性项分两类：
-    - 已实现：取关 CANN 组织（API 形态已抓包确认）。
-    - 待实现（需要先抓包 ai.gitcode.com 与搜索/下载/令牌接口，端点未探明前不猜测调用）：
-      创建访问令牌、搜索开源项目、查看代码、下载项目、模型初体验、下载模型文件、
-      激活Space、Notebook实战、WebIDE。这些在探明端点后逐个加入。
-    """
+    """首次模式：daily 全量 + 已批准的一次性项（oneoff 模块）+ 取关 CANN 组织。"""
     run_daily(client)
-    log.info("[F1 取关CANN] %s", unfollow_cann(client))
+    from . import oneoff
+    oneoff.run_oneoff(client)
+    log.info("[F9 取关CANN] %s", unfollow_cann(client))
 
 
 def unfollow_cann(client: GitCodeClient) -> str:

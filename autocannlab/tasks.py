@@ -47,13 +47,17 @@ def all_tasks(client: GitCodeClient) -> list[dict]:
 def claim(client: GitCodeClient, task_id: int) -> tuple[bool, str]:
     """领取任务奖励。返回 (是否成功, 说明)。
 
-    已知业务错误：1002 ILLEGAL_OPERATION「任务未完成」（条件未达成）。
-    其他「已领取」类错误同样归为不成功但不视为异常。
+    成功响应为裸布尔 true（实测）；已知业务错误：1002「任务未完成」、
+    「已超过可领取次数」（已领过或领取窗口已过）。
     """
     try:
         body = client.post_json(f"/uc/api/v1/task/{task_id}/points", body={})
     except ApiError as e:
         return False, e.message
+    if isinstance(body, bool):
+        return body, "已领取" if body else "服务端返回 false"
+    if not isinstance(body, dict):
+        return True, f"已领取（{str(body)[:60]}）"
     err = body.get("error_code")
     if err not in (None, 0, "0"):
         return False, body.get("error_message") or str(body)[:120]
@@ -77,5 +81,11 @@ def unclaimed_rewards(client: GitCodeClient) -> dict:
 
 
 def claimable_tasks(tasks: list[dict]) -> list[dict]:
-    """已达完成条件且需要主动领取的任务（estimated=1）。"""
-    return [t for t in tasks if t.get("estimated") == 1 and t.get("status") == STATUS_REACHED]
+    """已完成条件（current_count 达标）的任务。
+
+    注意：status 字段不区分「待领取/已领取」（实测两者都可能显示 1 或 2），
+    以 current_count >= need_count 为完成判据；重复领取由服务端
+    「已超过可领取次数」拒绝，属正常静默跳过。
+    """
+    return [t for t in tasks
+            if t.get("current_count", 0) >= t.get("need_count", 1)]

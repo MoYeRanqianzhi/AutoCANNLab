@@ -54,8 +54,10 @@ metadata:
 - 搜索 = GET `gitcode.com/search?type=repo&q=` （SSR 即执行）；看码 = GET `/{path}/blob/{branch}/{file}`；下载 = GET `/{path}/archive/{branch}.zip`。
 - WebIDE：`GET /uc/api/v1/sso/saml/loginUrl` → 302 到 devcloud.cn-north-4.huaweicloud.com/codeartside/webide。
 - 模型文件：`GET ai.gitcode.com/hf_mirrors/{model}/resolve/{branch}/{file}`。
-- aihub（Space/Notebook，域名待实测 api-ai.gitcode.com）：Space `POST /aihub/api/v1/space/{id}/start|/pause`、`GET /get_status`；Notebook `POST /aihub/api/v1/notebook`、`PUT /notebook/run_project|/pause`。
-- 模型初体验（84）的在线推理入口**未定位**（镜像页无推理 widget，「使用模型」仅为代码示例菜单）。
+- aihub API 域名（**实测确认 = web-api.gitcode.com/aihub/**，api-ai.gitcode.com 为 404）：
+  - Notebook（全链路浏览器实测）：`POST /aihub/api/v1/notebook` body `{flavor_id, image_id, disk_size:"50Gi", calculation_type:3(CPU), is_default:0}`；`PUT /notebook/pause` body `{"notebook_id"}`；`GET /notebook/detail` 返回 status（0=启动/运行，2=已停止）与 **expire_time（创建时刻+2h，会话硬上限）**；flavor/image 取自 `GET /space/server_list?ai_device_type=CPU&sdk=notebook` 与 `GET /space/image_list?ai_device=CPU&sdk=notebook`（最小规格 0.5v CPU·500MB，镜像 ubuntu22-python3.10-jupyter-cpu）。最坏消耗 1 核时。
+  - Space 激活：**放弃自动化**——实测未启动的第三方 Space 对访客无激活入口（仅作者可见），页面访问不计入任务；自建 Space 会创建仓库，触碰用户红线（损失一次性 +20）。
+- 模型初体验（84）的在线推理入口**未定位**（镜像页无推理 widget，「使用模型」仅为代码示例菜单；aichat 子应用是 AtomCode copilot，`/copilot/v1/api/*`）。
 
 **用户规则**：star/关注类任务领分后一律取消（unstar/取关）。结算为服务端自动（1h 内，实测 star 结算约在行为后数分钟的 compile_time 记录），领取与取消之间需轮询 `task?type=4` 确认 current_count 已计。
 

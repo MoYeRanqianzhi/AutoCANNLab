@@ -15,7 +15,7 @@ metadata:
 | task_id | name | 名称 | 积分 | 周期 | 结算 | 备注 |
 |---|---|---|---|---|---|---|
 | 96 | CANN_COMMUNITY_VISIT | 访问 CANN 社区 | +10 | 每日 | 自动 | 访问 /cann 下任意页面，1h 内结算 |
-| 105 | cann-study-part | CANN 社区课程学习 | +200 | 每日×8 | 自动 | 跑完 1 个 notebook 小节（.ipynb 全部代码运行）+200，日上限 8 次=1600；仅打开不运行不奖励 |
+| 105 | cann-study-part | CANN 社区课程学习 | +200 | 每日×8 | 自动 | 2026-10-08 实测打通：小节 = cann-learning-hub 课程 .ipynb 全部代码运行 + 批改「全部正确」+ 保存；服务端按 scanFilePath 周期扫描保存后的文件（实测完成→结算 30-60 分钟）；奖励二值（全对 200 / 否则 0），答错改正重跑批改即可；实例 = notebookcann（aihub/api/v1/notebookcann/insert，烧 NPU 卡时，ttl 120min，同 repo+path 复用）。完整流程已沉淀为 skill `.claude/skills/cannlab-course-study/`。README「不做课程学习」红线已由用户解除（真实学习模式） |
 | 104 | cann-star-project-v2 | Star 一个 CANN 项目 | +50 | 每项目1次 | 自动 | 不同项目可重复得；star 后领分再 unstar |
 | 97 | cann-issue-accepted | 提交 issue 并被接收 | +100 | 事件型 | 自动 | 当月封顶 5000 |
 | 99 | cann-event-signup | 赛事报名 | +200 | 每赛事1次 | 自动 | **一天可多次**（多报赛事） |

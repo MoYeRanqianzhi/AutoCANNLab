@@ -110,11 +110,15 @@ sudo systemctl enable --now autocannlab
 扫码/短信/密码登录页签仅为展示（GitCode 登录有易盾验证码，无法自动化），
 添加账号请用「登录态导入」。
 
-## 动作范围（2026-10-06 用户审定）
+## 动作范围（2026-10-06 用户审定，2026-10-08 增补）
 
 只做审定范围内的动作，每个动作先查任务状态，已完成即跳过（幂等）。
-明确不做：push/建仓库、资料修改、赛事报名、课程学习、每日分享、事件型任务。
+明确不做：push/建仓库、资料修改、赛事报名、每日分享、事件型任务。
 star 类任务领分后一律取消 star。见 `.agents/memory/risk-policy-and-scope.md`。
+
+课程学习任务（task 105）以**真实学习模式**执行：agent 在 CANNLab 在线 Notebook 中
+阅读课程内容、推导作答/亲手写代码，批改全对后才保存，每日不超过 8 小节。
+操作流程见 `.claude/skills/cannlab-course-study/SKILL.md`。
 
 ## 日志
 

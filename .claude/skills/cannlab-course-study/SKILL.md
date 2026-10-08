@@ -19,6 +19,7 @@ description: 完成 CANNLab 学习课程任务(task 105 cann-study-part,+200 积
 3. **积分到账有延迟**:实测完成 → 结算约 30-60 分钟(`compile_time` 字段),不要提前判定失败。
 4. **实例烧 NPU 卡时**(A2/A3 配额,实测 1 卡时/小时左右,ttl=120 分钟自动回收)。
    把多个小节挤在**同一实例**的 TTL 窗口内跑完,不要为每节课新建实例。
+   **全部小节跑完后主动关闭实例**(见下文「用完即关」),别干等 TTL。
 
 ## 课程与答题页在哪
 
@@ -101,3 +102,21 @@ notebook 在 iframe(title="Notebook CANN")内自动打开 scanFilePath 指定的
   `GET /score-proxy/api/v1/shop/third-party/goods?scene=cannlab_exchange&type=cann`。
 - 实例规格由平台分配(实测 Ascend910B4),insert 时不选 flavor。
 - 单实例成本上限 2 卡时(ttl 120 分钟);多节课挤 1 实例,收益(200×N 积分)远大于卡时成本。
+
+## 用完即关(防止继续计费)
+
+今日课程全部结束并保存后:
+
+1. **先关掉所有 notebookcann 相关页面**(lab 页、入口页)——这些页面会自动调 insert
+   把已关闭的实例重新拉起,是「关了又计费」的头号原因。
+2. 调用停止端点(需要 Bearer 登录态,`notebookId` 是 **query 参数**,不是 body):
+
+   ```
+   POST https://web-api.gitcode.com/aihub/api/v1/notebookcann/stop?notebookId=<实例id>
+   ```
+
+   成功瞬间服务器可能直接断连(httpx 报 RemoteProtocolError),属正常现象。
+3. 验证:`GET /aihub/api/v1/notebookcann/status?notebook_id=<实例id>` 返回
+   `{"status":2,"message":"Notebook 已关闭,请重新进入"}`;countdown 的 status 也为 2
+   且 remaining_seconds 冻结。`score-proxy overview` 的 `running_instance_count` 归零
+   有统计延迟,以 status=2 和配额 used 不再增长为准。

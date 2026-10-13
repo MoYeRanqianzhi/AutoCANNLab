@@ -11,7 +11,7 @@ export type Task = {
   id: string;
   name: string;
   description: string;
-  category: "daily" | "once";
+  category: "daily" | "once" | "star";
   currency: "CANN" | "GitCode";
   points: number;
   status: TaskStatus;

@@ -451,11 +451,15 @@ export function TaskTable({
   onRun,
   running,
   compact = false,
+  starExpanded = false,
+  starSlot = null,
 }: {
   tasks: Task[];
   onRun: (ids: string[]) => void;
   running: boolean;
   compact?: boolean;
+  starExpanded?: boolean;
+  starSlot?: ReactNode;
 }) {
   return (
     <div className={`task-table ${compact ? "compact" : ""}`}>
@@ -466,58 +470,75 @@ export function TaskTable({
         <span>操作</span>
       </div>
       {tasks.map((task) => (
-        <div className="task-row" key={task.id}>
-          <div className="task-name">
-            <span
-              className={`task-icon ${task.status === "done" ? "complete" : ""}`}
-            >
-              <Icon name={task.icon} size={19} />
-            </span>
-            <div>
-              <strong>{task.name}</strong>
-              <p>{task.description}</p>
+        <div key={task.id}>
+          <div className={`task-row ${task.category === "star" ? "star-row" : ""}`}>
+            <div className="task-name">
+              <span
+                className={`task-icon ${task.status === "done" ? "complete" : ""} ${
+                  task.category === "star" ? "star-variant" : ""
+                }`}
+              >
+                <Icon name={task.icon} size={19} />
+              </span>
+              <div>
+                <strong>
+                  {task.name}
+                  {task.category === "star" && <span className="star-tag">批量</span>}
+                </strong>
+                <p>{task.description}</p>
+              </div>
             </div>
+            <div className="task-reward">
+              {task.points ? (
+                <>
+                  <strong>+{task.points}</strong>
+                  <span>{task.currency}</span>
+                </>
+              ) : (
+                <span>按实际结算</span>
+              )}
+            </div>
+            <span className={`task-state ${task.status}`}>
+              <Icon
+                name={
+                  task.status === "done"
+                    ? "check"
+                    : task.status === "running"
+                      ? "loader"
+                      : "clock"
+                }
+                size={13}
+                className={task.status === "running" ? "spin" : ""}
+              />
+              {task.status === "done"
+                ? "已完成"
+                : task.status === "running"
+                  ? "执行中"
+                  : "待执行"}
+            </span>
+            <button
+              className={`task-action ${task.category === "star" ? "star-action-btn" : ""}`}
+              disabled={running && task.category !== "star"}
+              onClick={() => onRun([task.id])}
+              aria-label={task.category === "star" ? `展开${task.name}队列管理` : `执行${task.name}`}
+              title={task.category === "star" ? (starExpanded ? "收起队列管理" : "展开队列管理") : undefined}
+            >
+              {task.category === "star" ? (
+                starExpanded ? (
+                  <Icon name="close" size={15} />
+                ) : (
+                  <Icon name="arrow" size={15} />
+                )
+              ) : task.status === "done" ? (
+                <Icon name="check" size={16} />
+              ) : (
+                <Icon name="play" size={15} />
+              )}
+            </button>
           </div>
-          <div className="task-reward">
-            {task.points ? (
-              <>
-                <strong>+{task.points}</strong>
-                <span>{task.currency}</span>
-              </>
-            ) : (
-              <span>按实际结算</span>
-            )}
-          </div>
-          <span className={`task-state ${task.status}`}>
-            <Icon
-              name={
-                task.status === "done"
-                  ? "check"
-                  : task.status === "running"
-                    ? "loader"
-                    : "clock"
-              }
-              size={13}
-              className={task.status === "running" ? "spin" : ""}
-            />
-            {task.status === "done"
-              ? "已完成"
-              : task.status === "running"
-                ? "执行中"
-                : "待执行"}
-          </span>
-          <button
-            className="task-action"
-            disabled={running || task.status === "done"}
-            onClick={() => onRun([task.id])}
-            aria-label={`执行${task.name}`}
-          >
-            {task.status === "done" ? (
-              <Icon name="check" size={16} />
-            ) : (
-              <Icon name="play" size={15} />
-            )}
-          </button>
+          {task.category === "star" && starExpanded && (
+            <div className="star-inline-slot">{starSlot}</div>
+          )}
         </div>
       ))}
     </div>

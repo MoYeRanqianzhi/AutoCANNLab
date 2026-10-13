@@ -35,7 +35,7 @@ import {
   type Task,
 } from "./data";
 import { api, ApiError, getApiToken, setApiToken } from "./api";
-import { StarQueueDialog, StarQueuePanel } from "./StarQueueDialog";
+import { StarQueueDialog } from "./StarQueueDialog";
 
 type DialogState =
   | { type: "login"; accountId?: string }
@@ -48,7 +48,6 @@ type DialogState =
   | { type: "search" }
   | { type: "help" }
   | { type: "api-token" }
-  | { type: "star-queue" }
   | null;
 // run 对应服务端的一次执行（daily/full 链路）。
 type Run = { runId: string; accountId: string; mode: "daily" | "full" };
@@ -270,6 +269,12 @@ export default function App() {
     }
   }, []);
 
+  const [starExpanded, setStarExpanded] = useState(false);
+  const refreshStarPanel = useCallback(() => {
+    void loadTasks(activeId);
+    void refreshAccountStatus(activeId);
+  }, [activeId, loadTasks, refreshAccountStatus]);
+
   // 初始加载：已有 Token 才拉服务端，否则提示配置。
   useEffect(() => {
     if (getApiToken()) void loadServerState();
@@ -368,6 +373,11 @@ export default function App() {
   }
   async function startRun(ids: string[]) {
     if (isRunning) return;
+    // Star 队列是独立分类任务：不进执行链路，原地展开队列管理区
+    if (ids.includes("star-queue")) {
+      setStarExpanded((v) => !v);
+      return;
+    }
     if (activeAccount.status !== "online") {
       setDialog({ type: "login", accountId: activeId });
       return;
@@ -489,17 +499,15 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     notify("日志已导出");
   }
-  const filteredTasks = tasks
-    .filter((task) => task.id !== "star-queue")
-    .filter(
-      (task) =>
-        (taskFilter === "all" ||
-          task.category === taskFilter ||
-          task.status === taskFilter) &&
-        `${task.name}${task.description}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-    );
+  const filteredTasks = tasks.filter(
+    (task) =>
+      (taskFilter === "all" ||
+        task.category === taskFilter ||
+        task.status === taskFilter) &&
+      `${task.name}${task.description}`
+        .toLowerCase()
+        .includes(query.toLowerCase()),
+  );
   const filteredLogs = logs.filter(
     (log) =>
       (logLevel === "all" || log.level === logLevel) &&
@@ -1107,10 +1115,6 @@ export default function App() {
                   <button onClick={stopRun}>停止执行</button>
                 </div>
               )}
-              <StarQueuePanel
-                activeId={activeId}
-                onOpen={() => setDialog({ type: "star-queue" })}
-              />
               <section className="panel">
                 <div className="table-toolbar">
                   <div className="tabs" aria-label="任务筛选">
@@ -1118,11 +1122,12 @@ export default function App() {
                       { id: "all", label: "全部任务" },
                       { id: "daily", label: "日常任务" },
                       { id: "once", label: "一次性任务" },
+                      { id: "star", label: "Star 积分" },
                       { id: "pending", label: "待执行" },
                       { id: "done", label: "已完成" },
                     ].map((tab) => (
                       <button
-                        className={taskFilter === tab.id ? "selected" : ""}
+                        className={`${taskFilter === tab.id ? "selected" : ""} ${tab.id === "star" ? "star-tab" : ""}`}
                         key={tab.id}
                         onClick={() => setTaskFilter(tab.id)}
                       >
@@ -1145,6 +1150,16 @@ export default function App() {
                     tasks={filteredTasks}
                     onRun={startRun}
                     running={isRunning}
+                    starExpanded={starExpanded}
+                    starSlot={
+                      starExpanded ? (
+                        <StarQueueDialog
+                          accountId={activeId}
+                          notify={notify}
+                          onChanged={refreshStarPanel}
+                        />
+                      ) : null
+                    }
                   />
                 ) : (
                   <Empty
@@ -1876,27 +1891,6 @@ export default function App() {
               确认移除
             </button>
           </div>
-        </Modal>
-      )}
-      {dialog?.type === "star-queue" && (
-        <Modal
-          title="CANN 项目 Star 积分"
-          subtitle="点项目旁的 star 加入队列，队列自动逐个执行；每个项目 +50 积分，star 后自动取消。"
-          onClose={() => {
-            setDialog(null);
-            void loadTasks(activeId);
-            void refreshAccountStatus(activeId);
-          }}
-        >
-          <StarQueueDialog
-            accountId={activeId}
-            accountName={activeAccount.name}
-            notify={notify}
-            onChanged={() => {
-              void loadTasks(activeId);
-              void refreshAccountStatus(activeId);
-            }}
-          />
         </Modal>
       )}
       {dialog?.type === "api-token" && (

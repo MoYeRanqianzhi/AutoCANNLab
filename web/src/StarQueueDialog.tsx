@@ -1,6 +1,6 @@
-// CANN 项目 Star 队列管理弹窗：从任务中心「CANN 项目 Star 积分」任务行打开。
-// 左侧可选项目清单（缓存，点「更新清单」才请求 GitCode），点行内 star 即入队；
-// 队列常驻后台自动执行（拟人化节奏），可暂停/继续；star 后 6-15 小时自动取消。
+// CANN 项目 Star 队列的内联管理区：随任务中心 Star 分类行展开（非弹窗、不跳页）。
+// 左栏点项目旁的 star 即入队，右栏队列由后台自动执行（拟人化节奏）；
+// star 后 6-15 小时自动取消；项目清单缓存服务端，仅「更新清单」访问 GitCode。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Empty, Icon } from "./components";
 import {
@@ -13,99 +13,9 @@ import {
 
 type Props = {
   accountId: string;
-  accountName: string;
   notify: (message: string) => void;
-  onChanged: () => void; // 关闭或状态变化后让任务中心刷新
+  onChanged: () => void; // 状态变化后让任务清单刷新
 };
-
-// 任务中心顶部的 Star 队列专属面板：概要 + 打开管理入口。
-export function StarQueuePanel({
-  activeId,
-  onOpen,
-}: {
-  activeId: string;
-  onOpen: () => void;
-}) {
-  const [summary, setSummary] = useState<{
-    queued: number;
-    starred: number;
-    done: number;
-    projects_cached: number;
-    paused: boolean;
-    running: boolean;
-  } | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setSummary(await api.batchStarSummary(activeId));
-    } catch {
-      // 概要失败不阻塞任务中心
-    }
-  }, [activeId]);
-
-  useEffect(() => {
-    void load();
-    const timer = setInterval(load, 10000);
-    return () => clearInterval(timer);
-  }, [load]);
-
-  const total = summary ? summary.queued + summary.starred + summary.done : 0;
-
-  return (
-    <section className="panel star-panel">
-      <div className="table-toolbar">
-        <div className="star-panel-title">
-          <span className="task-icon">
-            <Icon name="star" size={19} />
-          </span>
-          <div>
-            <strong>CANN 项目 Star 积分</strong>
-            <p>批量 star CANN org 项目，每个 +50 积分，star 后自动取消。</p>
-          </div>
-        </div>
-        <button className="button primary" onClick={onOpen}>
-          <Icon name="arrow" size={16} />
-          管理 Star 队列
-        </button>
-      </div>
-      <div className="star-panel-summary">
-        {summary && total > 0 ? (
-          <>
-            <span>
-              队列中 <strong>{summary.queued}</strong>
-            </span>
-            <span>
-              已 star <strong>{summary.starred}</strong>
-            </span>
-            <span>
-              已完成 <strong>{summary.done}</strong>
-            </span>
-            <span>
-              预计积分 <strong>+{(summary.queued + summary.starred) * 50}</strong>
-            </span>
-            {summary.running && (
-              <Badge tone="orange">
-                <Icon name="loader" className="spin" size={12} /> 执行中
-              </Badge>
-            )}
-            {summary.paused && !summary.running && <Badge tone="neutral">已暂停</Badge>}
-          </>
-        ) : (
-          <span>
-            {summary && summary.projects_cached > 0
-              ? `清单已缓存 ${summary.projects_cached} 个项目，尚无 star 记录`
-              : "尚未拉取项目清单，进入管理后点「更新清单」"}
-          </span>
-        )}
-      </div>
-      <div className="panel-foot">
-        <Icon name="shield" size={14} />
-        拟人化慢速执行，手动 star 的项目永远不会被自动取消
-        <span>{total > 0 ? `${total} 条记录` : "独立于日常任务"}</span>
-      </div>
-    </section>
-  );
-}
 
 export function StarQueueDialog({ accountId, notify, onChanged }: Props) {
   const [projects, setProjects] = useState<BatchStarProject[]>([]);
@@ -114,8 +24,8 @@ export function StarQueueDialog({ accountId, notify, onChanged }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
   const [queueBusy, setQueueBusy] = useState<number | null>(null);
+  const [enqueueAllBusy, setEnqueueAllBusy] = useState(false);
   const [paused, setPaused] = useState(false);
-  const [runId, setRunId] = useState<string | null>(null);
   const [run, setRun] = useState<BatchStarRun | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -129,7 +39,7 @@ export function StarQueueDialog({ accountId, notify, onChanged }: Props) {
       setRecords(recs);
       setFetchedAt(list.find((p) => p.fetched_at)?.fetched_at ?? null);
     } catch (error) {
-      notify(error instanceof ApiError ? error.message : "加载失败");
+      notify(error instanceof ApiError ? error.message : "加载 Star 队列失败");
     }
   }, [accountId, notify]);
 
@@ -140,33 +50,28 @@ export function StarQueueDialog({ accountId, notify, onChanged }: Props) {
     };
   }, [loadLocal]);
 
-  // 队列执行进度轮询：批量运行挂在最近一次 batch_star run 上
+  // 执行进度轮询
   useEffect(() => {
     const poll = async () => {
       try {
         const runs = await api.listRuns();
         const starRun = runs.find((r) => r.mode === "batch_star");
         if (starRun && starRun.status === "running") {
-          setRunId(starRun.id);
           setRun(starRun as BatchStarRun);
-        } else if (runId && starRun && starRun.id === runId) {
-          setRun(starRun as BatchStarRun);
-          if (starRun.status !== "running") {
-            notify(starRun.summary ?? "队列执行结束");
-            setRunId(null);
-            await loadLocal();
-            onChanged();
-          }
+        } else if (starRun) {
+          setRun(starRun.status === "ok" ? null : (starRun as BatchStarRun));
+          if (starRun.status === "ok") void loadLocal();
         }
       } catch {
         // 轮询失败下次重试
       }
     };
     void poll();
-    const timer = setInterval(poll, 5000);
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId, loadLocal, onChanged]);
+    pollRef.current = setInterval(poll, 5000);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [loadLocal]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -175,12 +80,13 @@ export function StarQueueDialog({ accountId, notify, onChanged }: Props) {
       setFetchedAt(result.fetched_at);
       notify(`清单已更新，共 ${result.count} 个项目`);
       await loadLocal();
+      onChanged();
     } catch (error) {
       notify(error instanceof ApiError ? error.message : "更新清单失败");
     } finally {
       setRefreshing(false);
     }
-  }, [accountId, loadLocal, notify]);
+  }, [accountId, loadLocal, notify, onChanged]);
 
   const enqueue = async (project: BatchStarProject) => {
     setQueueBusy(project.id);
@@ -193,6 +99,24 @@ export function StarQueueDialog({ accountId, notify, onChanged }: Props) {
       notify(error instanceof ApiError ? error.message : "加入队列失败");
     } finally {
       setQueueBusy(null);
+    }
+  };
+
+  const enqueueAll = async () => {
+    if (!pool.length) return;
+    setEnqueueAllBusy(true);
+    try {
+      const result = await api.batchStarEnqueueAll({
+        account_id: accountId,
+        project_ids: pool.map((p) => p.id),
+      });
+      notify(`已把 ${result.added} 个项目加入队列，共 ${result.total} 项待执行`);
+      await loadLocal();
+      onChanged();
+    } catch (error) {
+      notify(error instanceof ApiError ? error.message : "批量入队失败");
+    } finally {
+      setEnqueueAllBusy(false);
     }
   };
 
@@ -215,47 +139,22 @@ export function StarQueueDialog({ accountId, notify, onChanged }: Props) {
   const queued = records.filter((r) => r.source === "batch" && r.status === "queued");
   const starred = records.filter((r) => r.source === "batch" && r.status === "starred" && !r.unstarred);
   const done = records.filter((r) => r.source === "batch" && r.unstarred);
-
   const queuedPaths = new Set(queued.map((r) => r.path));
   const pool = projects
     .filter((p) => p.star_state === "new" && !p.archived && !queuedPaths.has(p.path))
     .filter((p) => !query || p.path.toLowerCase().includes(query.toLowerCase()));
 
   return (
-    <div className="star-queue-dialog">
-      <div className="star-queue-stats">
-        <div>
-          <span>队列中</span>
-          <strong>{queued.length}</strong>
-        </div>
-        <div>
-          <span>已 star</span>
-          <strong>{starred.length}</strong>
-        </div>
-        <div>
-          <span>已完成</span>
-          <strong>{done.length}</strong>
-        </div>
-        <div>
-          <span>积分</span>
-          <strong>
-            +{done.length * 50}
-            <small> 已到账</small>
-          </strong>
-        </div>
-      </div>
-
-      {run && (
-        <div className={`running-banner ${run.status !== "running" ? "done" : ""}`}>
-          <Icon name={run.status === "running" ? "loader" : "check"} className={run.status === "running" ? "spin" : ""} />
+    <div className="star-queue-body">
+      {run && run.status === "running" && (
+        <div className="running-banner">
+          <Icon name="loader" className="spin" />
           <span>
-            {run.status === "running"
-              ? `正在执行 ${run.progress?.done ?? 0}/${run.progress?.total ?? 0}（已 star ${run.progress?.starred ?? 0}）${run.cancel_requested ? " · 暂停中…" : ""}`
-              : run.summary ?? "队列执行结束"}
+            正在执行 {run.progress?.done ?? 0}/{run.progress?.total ?? 0}
+            （已 star {run.progress?.starred ?? 0}）
+            {run.cancel_requested ? " · 暂停中…" : ""}
           </span>
-          {run.status === "running" && (
-            <button onClick={() => void togglePause()}>{paused ? "继续" : "暂停"}</button>
-          )}
+          <button onClick={() => void togglePause()}>{paused ? "继续" : "暂停"}</button>
         </div>
       )}
 
@@ -265,10 +164,28 @@ export function StarQueueDialog({ accountId, notify, onChanged }: Props) {
             ? `清单更新于 ${fetchedAt.replace("T", " ")}`
             : "尚未拉取项目清单"}
         </span>
-        <button className="text-button" disabled={refreshing} onClick={() => void refresh()}>
-          <Icon name={refreshing ? "loader" : "activity"} className={refreshing ? "spin" : ""} size={15} />
-          {refreshing ? "更新中" : "更新清单"}
-        </button>
+        <div className="star-queue-toolbar-actions">
+          <button
+            className="button star-all-btn"
+            disabled={enqueueAllBusy || !pool.length}
+            onClick={() => void enqueueAll()}
+          >
+            <Icon
+              name={enqueueAllBusy ? "loader" : "star"}
+              className={enqueueAllBusy ? "spin" : ""}
+              size={15}
+            />
+            一键全部入队（{pool.length} · 约 +{pool.length * 50}）
+          </button>
+          <button className="text-button" disabled={refreshing} onClick={() => void refresh()}>
+            <Icon
+              name={refreshing ? "loader" : "activity"}
+              className={refreshing ? "spin" : ""}
+              size={15}
+            />
+            {refreshing ? "更新中" : "更新清单"}
+          </button>
+        </div>
       </div>
 
       <div className="star-queue-grid">

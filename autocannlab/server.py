@@ -323,6 +323,24 @@ def account_tasks(account_id: str, _: None = Depends(require_auth)):
             "category": "daily" if t.get("period") == 4 else "once",
             "done": (t.get("current_count") or 0) >= (t.get("need_count") or 1),
         })
+    # Star 队列虚拟任务：独立分类（category="star"），UI 用金色变体渲染并内联展开队列管理
+    batch = [s for s in store.list_stars(account_id) if s.get("source") == "batch"]
+    queued = sum(1 for s in batch if s.get("status") == "queued")
+    starred_n = sum(1 for s in batch if s.get("status") == "starred" and not s.get("unstarred"))
+    done_n = sum(1 for s in batch if s.get("unstarred"))
+    cached = len(store.cached_projects())
+    out.append({
+        "task_id": "star-queue",
+        "cn_name": "CANN 项目 Star 积分",
+        "description": (
+            f"批量 star CANN org 项目（每个 +50）后自动取消；"
+            f"队列 {queued} 项，已 star {starred_n} 项，已完成 {done_n} 项，清单 {cached} 个项目"
+        ),
+        "score": 50,
+        "currency": "CANN",
+        "category": "star",
+        "done": False,
+    })
     return out
 
 
@@ -486,15 +504,49 @@ class QueueAddIn(BaseModel):
 @app.post("/api/batch-star/queue")
 def batch_star_enqueue(body: QueueAddIn, _: None = Depends(require_auth)):
     """把单个项目加入待 star 队列（行内 star 按钮即入队；队列由后台自动执行）。"""
-    account = store.get_account(body.account_id)
+    rec = _enqueue_one(body.account_id, body.project_id)
+    return rec
+
+
+class QueueAddAllIn(BaseModel):
+    account_id: str
+    project_ids: list[int]
+
+
+@app.post("/api/batch-star/queue/all")
+def batch_star_enqueue_all(body: QueueAddAllIn, _: None = Depends(require_auth)):
+    """一键全部入队：把给定项目批量加入待 star 队列（已入队/已 star 的自动跳过）。"""
+    if store.get_account(body.account_id) is None:
+        raise HTTPException(404, "账号不存在")
+    added = 0
+    for pid in body.project_ids:
+        try:
+            _enqueue_one(body.account_id, pid, quiet=True)
+            added += 1
+        except HTTPException:
+            continue
+    total = len(store.queued_projects(body.account_id))
+    return {"added": added, "total": total}
+
+
+def _enqueue_one(account_id: str, project_id: int, *, quiet: bool = False) -> dict:
+    account = store.get_account(account_id)
     if account is None:
         raise HTTPException(404, "账号不存在")
-    project = next((p for p in store.cached_projects() if p["id"] == body.project_id), None)
+    project = next((p for p in store.cached_projects() if p["id"] == project_id), None)
     if project is None:
+        if quiet:
+            raise HTTPException(404, "项目不在缓存清单中")
         raise HTTPException(404, "项目不在缓存清单中（先更新清单）")
     if project.get("archived"):
         raise HTTPException(400, "项目已归档，无法 star")
-    rec = store.queue_star(body.account_id, body.project_id, project["path"])
+    existing = next((s for s in store.list_stars(account_id)
+                     if s["project_id"] == project_id and s.get("status") == "queued"), None)
+    if existing:
+        if quiet:
+            raise HTTPException(409, "已在队列")
+        return existing
+    rec = store.queue_star(account_id, project_id, project["path"])
     return rec
 
 

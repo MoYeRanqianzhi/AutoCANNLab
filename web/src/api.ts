@@ -92,12 +92,12 @@ export type AccountStatus = {
   refresh_days_left: number | null;
 };
 export type UiTask = {
-  task_id: number;
+  task_id: number | string;
   cn_name: string;
   description: string;
   score: number;
   currency: "CANN" | "GitCode";
-  category: "daily" | "once";
+  category: "daily" | "once" | "star";
   done: boolean;
 };
 
@@ -187,6 +187,11 @@ export const api = {
     ),
   batchStarEnqueue: (body: { account_id: string; project_id: number }) =>
     request<BatchStarRecord>("/batch-star/queue", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  batchStarEnqueueAll: (body: { account_id: string; project_ids: number[] }) =>
+    request<{ added: number; total: number }>("/batch-star/queue/all", {
       method: "POST",
       body: JSON.stringify(body),
     }),

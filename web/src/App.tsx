@@ -35,6 +35,7 @@ import {
   type Task,
 } from "./data";
 import { api, ApiError, getApiToken, setApiToken } from "./api";
+import { StarsPage } from "./StarsPage";
 
 type DialogState =
   | { type: "login"; accountId?: string }
@@ -62,6 +63,7 @@ const pageDescriptions: Record<Page, string> = {
   accounts: "一个工作台，照顾每一个 GitCode 账号。",
   proxies: "为不同账号安排合适的网络连接。",
   logs: "每一步都有迹可循，每一份收获清晰可见。",
+  stars: "把每一个认可，都变成算力的积蓄。",
 };
 
 // hash 路由不需要服务器 rewrite，刷新或直接打开子页面都能由静态文件恢复。
@@ -1582,6 +1584,8 @@ export default function App() {
               </div>
             </>
           )}
+
+          {page === "stars" && <StarsPage activeId={activeId} notify={notify} />}
 
           {page === "logs" && (
             <>

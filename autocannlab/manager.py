@@ -9,7 +9,7 @@ import time
 import uuid
 from datetime import datetime
 
-from . import actions, oneoff, tasks
+from . import actions, batch_star, oneoff, tasks
 from .client import ApiError, GitCodeClient
 from .store import Store
 
@@ -41,6 +41,22 @@ class Manager:
         self.runs: dict[str, dict] = {}
         self.runs_order: list[str] = []
         self._scheduler_stop = threading.Event()
+        self._unstar_stop = threading.Event()
+        self.unstar_wakeup = threading.Event()
+
+    # ---------- 后台线程 ----------
+
+    def start_background(self) -> None:
+        """启动定时调度与 unstar 取消队列两个后台线程。"""
+        threading.Thread(target=self._scheduler_loop, daemon=True,
+                         name="scheduler").start()
+        threading.Thread(target=batch_star.process_unstar_queue, args=(self,),
+                         daemon=True, name="unstar-queue").start()
+
+    def stop_background(self) -> None:
+        self._scheduler_stop.set()
+        self._unstar_stop.set()
+        self.unstar_wakeup.set()
 
     # ---------- 客户端构建 ----------
 

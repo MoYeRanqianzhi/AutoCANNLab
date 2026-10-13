@@ -193,6 +193,63 @@ class Store:
             _atomic_write(self._schedule_path(), data)
         return data
 
+    # ---------- Star 批量任务记录 ----------
+
+    def _stars_path(self) -> Path:
+        return self.dir / "stars.json"
+
+    def list_stars(self, account_id: str | None = None) -> list[dict]:
+        with _lock:
+            data = _load(self._stars_path(), {"stars": []})
+        stars = data.get("stars", [])
+        if account_id:
+            stars = [s for s in stars if s.get("account_id") == account_id]
+        return stars
+
+    def add_star(self, account_id: str, project_id, path: str, source: str) -> dict:
+        """记录一次 star（source=batch 由批量功能打出，source=user 用户手动打的）。
+        同账号同项目只记一条，重复调用返回已有记录。"""
+        with _lock:
+            data = _load(self._stars_path(), {"stars": []})
+            stars = data.setdefault("stars", [])
+            for s in stars:
+                if s["account_id"] == account_id and s["project_id"] == project_id:
+                    return s
+            rec = {
+                "account_id": account_id,
+                "project_id": project_id,
+                "path": path,
+                "source": source,
+                "starred_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "unstarred": False,
+                "unstarred_at": None,
+            }
+            stars.append(rec)
+            _atomic_write(self._stars_path(), data)
+            return rec
+
+    def enqueue_unstar(self, account_id: str, project_id, path: str, due_ts: float) -> None:
+        """为已记录的 star 设置取消到期时间。仅 batch 来源会入队（安全护栏）。"""
+        with _lock:
+            data = _load(self._stars_path(), {"stars": []})
+            for s in data.get("stars", []):
+                if (s["account_id"] == account_id and s["project_id"] == project_id
+                        and s.get("source") == "batch"):
+                    s["unstar_due"] = due_ts
+                    _atomic_write(self._stars_path(), data)
+                    return
+
+    def mark_unstarred(self, account_id: str, project_id) -> dict | None:
+        with _lock:
+            data = _load(self._stars_path(), {"stars": []})
+            for s in data.get("stars", []):
+                if s["account_id"] == account_id and s["project_id"] == project_id:
+                    s["unstarred"] = True
+                    s["unstarred_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    _atomic_write(self._stars_path(), data)
+                    return s
+        return None
+
     # ---------- API 访问令牌 ----------
 
     def api_token(self) -> str:

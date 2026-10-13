@@ -101,6 +101,31 @@ export type UiTask = {
   done: boolean;
 };
 
+export type BatchStarProject = {
+  id: number;
+  path: string;
+  archived: boolean;
+  star_state: "new" | "batch_pending" | "batch_unstarred";
+};
+
+export type BatchStarRecord = {
+  account_id: string;
+  project_id: number;
+  path: string;
+  source: "batch" | "user";
+  starred_at: string;
+  unstarred: boolean;
+  unstarred_at: string | null;
+  unstar_due?: number;
+};
+
+// 批量 star 的运行与 daily/full 共用 ServerRun 形状，附 progress / cancel_requested。
+export type BatchStarRun = ServerRun & {
+  kind?: "batch_star";
+  progress?: { total: number; done: number; starred: number; skipped: number; failed: number };
+  cancel_requested?: boolean;
+};
+
 export const api = {
   state: () => request<ServerState>("/state"),
   addAccount: (body: {
@@ -151,12 +176,23 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  batchStarProjects: (accountId: string) =>
+    request<BatchStarProject[]>(`/batch-star/projects/${accountId}`),
+  batchStarStart: (body: { account_id: string; project_ids: number[] | null }) =>
+    request<{ run_id: string }>("/batch-star/start", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  batchStarStop: (runId: string) =>
+    request<{ ok: boolean }>(`/batch-star/stop/${runId}`, { method: "POST" }),
+  batchStarRecords: (accountId: string) =>
+    request<BatchStarRecord[]>(`/batch-star/records/${accountId}`),
   startRun: (accountId: string, mode: "daily" | "full") =>
     request<{ run_id: string }>("/runs", {
       method: "POST",
       body: JSON.stringify({ account_id: accountId, mode }),
     }),
-  getRun: (id: string) => request<ServerRun>(`/runs/${id}`),
+  getRun: (id: string) => request<BatchStarRun>(`/runs/${id}`),
   listRuns: () => request<ServerRun[]>("/runs"),
   logs: (level = "all", q = "") =>
     request<{ file: string; level: string; message: string }[]>(

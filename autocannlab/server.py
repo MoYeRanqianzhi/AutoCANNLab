@@ -420,6 +420,60 @@ def get_run(run_id: str, _: None = Depends(require_auth)):
     return run
 
 
+# ---------- 批量 star ----------
+
+@app.get("/api/batch-star/projects/{account_id}")
+def batch_star_projects(account_id: str, _: None = Depends(require_auth)):
+    """CANN org 项目清单 + 本账号 star 记账状态（供 UI 勾选）。"""
+    account = store.get_account(account_id)
+    if account is None:
+        raise HTTPException(404, "账号不存在")
+    from . import batch_star
+    try:
+        client = manager.build_client(account)
+        client.prepare()
+        projects = batch_star.list_cann_projects(client)
+    except ApiError as e:
+        raise HTTPException(502, f"拉取项目清单失败: {e.message}") from None
+    starred = {s["project_id"]: s for s in store.list_stars(account_id)}
+    return [{
+        "id": p["id"], "path": p["path"], "archived": p["archived"],
+        "star_state": "batch_pending" if (s := starred.get(p["id"])) and not s["unstarred"]
+        else "batch_unstarred" if p["id"] in starred
+        else "new",
+    } for p in projects]
+
+
+class BatchStarIn(BaseModel):
+    account_id: str
+    project_ids: list[int] | None = None  # None = 全部未打项目
+
+
+@app.post("/api/batch-star/start")
+def batch_star_start(body: BatchStarIn, _: None = Depends(require_auth)):
+    from . import batch_star
+    try:
+        run_id = batch_star.start(manager, body.account_id, body.project_ids)
+    except KeyError:
+        raise HTTPException(404, "账号不存在") from None
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from None
+    return {"run_id": run_id}
+
+
+@app.post("/api/batch-star/stop/{run_id}")
+def batch_star_stop(run_id: str, _: None = Depends(require_auth)):
+    from . import batch_star
+    if not batch_star.request_cancel(manager, run_id):
+        raise HTTPException(404, "运行不存在")
+    return {"ok": True}
+
+
+@app.get("/api/batch-star/records/{account_id}")
+def batch_star_records(account_id: str, _: None = Depends(require_auth)):
+    return store.list_stars(account_id)
+
+
 # ---------- 日志 ----------
 
 @app.get("/api/logs")
@@ -492,7 +546,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     migrate_legacy_secrets()
-    manager.start_scheduler()
+    manager.start_background()
     import uvicorn
     print(f"API Token: {store.api_token()}")
     print(f"数据目录: {store.dir}")

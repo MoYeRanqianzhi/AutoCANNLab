@@ -105,7 +105,8 @@ export type BatchStarProject = {
   id: number;
   path: string;
   archived: boolean;
-  star_state: "new" | "batch_pending" | "batch_unstarred";
+  fetched_at?: string | null;
+  star_state: "new" | "queued" | "batch_pending" | "batch_unstarred";
 };
 
 export type BatchStarRecord = {
@@ -113,7 +114,8 @@ export type BatchStarRecord = {
   project_id: number;
   path: string;
   source: "batch" | "user";
-  starred_at: string;
+  status?: "queued" | "starred";
+  starred_at: string | null;
   unstarred: boolean;
   unstarred_at: string | null;
   unstar_due?: number;
@@ -178,15 +180,33 @@ export const api = {
     }),
   batchStarProjects: (accountId: string) =>
     request<BatchStarProject[]>(`/batch-star/projects/${accountId}`),
-  batchStarStart: (body: { account_id: string; project_ids: number[] | null }) =>
-    request<{ run_id: string }>("/batch-star/start", {
+  batchStarRefresh: (accountId: string) =>
+    request<{ count: number; fetched_at: string }>(
+      `/batch-star/projects/${accountId}/refresh`,
+      { method: "POST" },
+    ),
+  batchStarEnqueue: (body: { account_id: string; project_id: number }) =>
+    request<BatchStarRecord>("/batch-star/queue", {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  batchStarPause: (accountId: string) =>
+    request<{ ok: boolean }>(`/batch-star/queue/${accountId}/pause`, { method: "POST" }),
+  batchStarResume: (accountId: string) =>
+    request<{ ok: boolean }>(`/batch-star/queue/${accountId}/resume`, { method: "POST" }),
   batchStarStop: (runId: string) =>
     request<{ ok: boolean }>(`/batch-star/stop/${runId}`, { method: "POST" }),
   batchStarRecords: (accountId: string) =>
     request<BatchStarRecord[]>(`/batch-star/records/${accountId}`),
+  batchStarSummary: (accountId: string) =>
+    request<{
+      queued: number;
+      starred: number;
+      done: number;
+      projects_cached: number;
+      paused: boolean;
+      running: boolean;
+    }>(`/batch-star/summary/${accountId}`),
   startRun: (accountId: string, mode: "daily" | "full") =>
     request<{ run_id: string }>("/runs", {
       method: "POST",

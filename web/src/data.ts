@@ -5,8 +5,7 @@ export type Page =
   | "schedule"
   | "accounts"
   | "proxies"
-  | "logs"
-  | "stars";
+  | "logs";
 export type TaskStatus = "pending" | "running" | "done";
 export type Task = {
   id: string;
@@ -57,7 +56,6 @@ export const navigation: { id: Page; label: string; icon: string }[] = [
   { id: "schedule", label: "定时计划", icon: "calendar" },
   { id: "accounts", label: "账号管理", icon: "users" },
   { id: "proxies", label: "代理节点", icon: "network" },
-  { id: "stars", label: "Star 积分", icon: "star" },
   { id: "logs", label: "运行日志", icon: "logs" },
 ];
 

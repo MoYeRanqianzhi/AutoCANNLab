@@ -43,15 +43,19 @@ class Manager:
         self._scheduler_stop = threading.Event()
         self._unstar_stop = threading.Event()
         self.unstar_wakeup = threading.Event()
+        # 批量 star 队列的暂停开关（按账号 id 集合）
+        self.queue_paused: set[str] = set()
 
     # ---------- 后台线程 ----------
 
     def start_background(self) -> None:
-        """启动定时调度与 unstar 取消队列两个后台线程。"""
+        """启动定时调度、unstar 取消队列、star 待办队列三个后台线程。"""
         threading.Thread(target=self._scheduler_loop, daemon=True,
                          name="scheduler").start()
         threading.Thread(target=batch_star.process_unstar_queue, args=(self,),
                          daemon=True, name="unstar-queue").start()
+        threading.Thread(target=batch_star.queue_worker, args=(self,),
+                         daemon=True, name="star-queue").start()
 
     def stop_background(self) -> None:
         self._scheduler_stop.set()

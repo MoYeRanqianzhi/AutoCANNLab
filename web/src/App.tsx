@@ -35,7 +35,7 @@ import {
   type Task,
 } from "./data";
 import { api, ApiError, getApiToken, setApiToken } from "./api";
-import { StarsPage } from "./StarsPage";
+import { StarQueueDialog, StarQueuePanel } from "./StarQueueDialog";
 
 type DialogState =
   | { type: "login"; accountId?: string }
@@ -48,6 +48,7 @@ type DialogState =
   | { type: "search" }
   | { type: "help" }
   | { type: "api-token" }
+  | { type: "star-queue" }
   | null;
 // run 对应服务端的一次执行（daily/full 链路）。
 type Run = { runId: string; accountId: string; mode: "daily" | "full" };
@@ -63,7 +64,6 @@ const pageDescriptions: Record<Page, string> = {
   accounts: "一个工作台，照顾每一个 GitCode 账号。",
   proxies: "为不同账号安排合适的网络连接。",
   logs: "每一步都有迹可循，每一份收获清晰可见。",
-  stars: "把每一个认可，都变成算力的积蓄。",
 };
 
 // hash 路由不需要服务器 rewrite，刷新或直接打开子页面都能由静态文件恢复。
@@ -489,15 +489,17 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     notify("日志已导出");
   }
-  const filteredTasks = tasks.filter(
-    (task) =>
-      (taskFilter === "all" ||
-        task.category === taskFilter ||
-        task.status === taskFilter) &&
-      `${task.name}${task.description}`
-        .toLowerCase()
-        .includes(query.toLowerCase()),
-  );
+  const filteredTasks = tasks
+    .filter((task) => task.id !== "star-queue")
+    .filter(
+      (task) =>
+        (taskFilter === "all" ||
+          task.category === taskFilter ||
+          task.status === taskFilter) &&
+        `${task.name}${task.description}`
+          .toLowerCase()
+          .includes(query.toLowerCase()),
+    );
   const filteredLogs = logs.filter(
     (log) =>
       (logLevel === "all" || log.level === logLevel) &&
@@ -1105,6 +1107,10 @@ export default function App() {
                   <button onClick={stopRun}>停止执行</button>
                 </div>
               )}
+              <StarQueuePanel
+                activeId={activeId}
+                onOpen={() => setDialog({ type: "star-queue" })}
+              />
               <section className="panel">
                 <div className="table-toolbar">
                   <div className="tabs" aria-label="任务筛选">
@@ -1585,8 +1591,6 @@ export default function App() {
             </>
           )}
 
-          {page === "stars" && <StarsPage activeId={activeId} notify={notify} />}
-
           {page === "logs" && (
             <>
               <div className="log-summary">
@@ -1872,6 +1876,27 @@ export default function App() {
               确认移除
             </button>
           </div>
+        </Modal>
+      )}
+      {dialog?.type === "star-queue" && (
+        <Modal
+          title="CANN 项目 Star 积分"
+          subtitle="点项目旁的 star 加入队列，队列自动逐个执行；每个项目 +50 积分，star 后自动取消。"
+          onClose={() => {
+            setDialog(null);
+            void loadTasks(activeId);
+            void refreshAccountStatus(activeId);
+          }}
+        >
+          <StarQueueDialog
+            accountId={activeId}
+            accountName={activeAccount.name}
+            notify={notify}
+            onChanged={() => {
+              void loadTasks(activeId);
+              void refreshAccountStatus(activeId);
+            }}
+          />
         </Modal>
       )}
       {dialog?.type === "api-token" && (

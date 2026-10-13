@@ -301,7 +301,8 @@ def account_status(account_id: str, _: None = Depends(require_auth)):
 
 @app.get("/api/accounts/{account_id}/tasks")
 def account_tasks(account_id: str, _: None = Depends(require_auth)):
-    """真实任务清单（成长中心 + CANN 任务），映射为 UI 的任务形状。"""
+    """真实任务清单（成长中心 + CANN 任务），映射为 UI 的任务形状。
+    末尾追加「CANN 项目 Star 队列」虚拟任务行（task_id 用字符串前缀区分）。"""
     account = store.get_account(account_id)
     if account is None:
         raise HTTPException(404, "账号不存在")
@@ -323,6 +324,26 @@ def account_tasks(account_id: str, _: None = Depends(require_auth)):
             "done": (t.get("current_count") or 0) >= (t.get("need_count") or 1),
         })
     return out
+
+
+@app.get("/api/batch-star/summary/{account_id}")
+def batch_star_summary(account_id: str, _: None = Depends(require_auth)):
+    """Star 队列概要（任务中心顶部专属面板用）。"""
+    if store.get_account(account_id) is None:
+        raise HTTPException(404, "账号不存在")
+    records = store.list_stars(account_id)
+    batch = [s for s in records if s.get("source") == "batch"]
+    paused = account_id in manager.queue_paused
+    running = any(r.get("kind") == "batch_star" and r.get("status") == "running"
+                  for r in manager.runs.values())
+    return {
+        "queued": sum(1 for s in batch if s.get("status") == "queued"),
+        "starred": sum(1 for s in batch if s.get("status") == "starred" and not s.get("unstarred")),
+        "done": sum(1 for s in batch if s.get("unstarred")),
+        "projects_cached": len(store.cached_projects()),
+        "paused": paused,
+        "running": running,
+    }
 
 
 # ---------- 代理 ----------
@@ -424,7 +445,24 @@ def get_run(run_id: str, _: None = Depends(require_auth)):
 
 @app.get("/api/batch-star/projects/{account_id}")
 def batch_star_projects(account_id: str, _: None = Depends(require_auth)):
-    """CANN org 项目清单 + 本账号 star 记账状态（供 UI 勾选）。"""
+    """项目清单（本地缓存，不发外部请求）。前端进入页面即时呈现。"""
+    if store.get_account(account_id) is None:
+        raise HTTPException(404, "账号不存在")
+    cached = store.cached_projects()
+    starred = {s["project_id"]: s for s in store.list_stars(account_id)}
+    return [{
+        "id": p["id"], "path": p["path"], "archived": p.get("archived", False),
+        "fetched_at": p.get("fetched_at"),
+        "star_state": "batch_pending" if (s := starred.get(p["id"])) and s.get("status") == "starred"
+        else "queued" if (s := starred.get(p["id"])) and s.get("status") == "queued"
+        else "batch_unstarred" if p["id"] in starred
+        else "new",
+    } for p in cached]
+
+
+@app.post("/api/batch-star/projects/{account_id}/refresh")
+def batch_star_refresh(account_id: str, _: None = Depends(require_auth)):
+    """手动刷新：实时拉取 CANN org 项目清单并写缓存。仅用户点击时发起外部请求。"""
     account = store.get_account(account_id)
     if account is None:
         raise HTTPException(404, "账号不存在")
@@ -435,42 +473,52 @@ def batch_star_projects(account_id: str, _: None = Depends(require_auth)):
         projects = batch_star.list_cann_projects(client)
     except ApiError as e:
         raise HTTPException(502, f"拉取项目清单失败: {e.message}") from None
-    starred = {s["project_id"]: s for s in store.list_stars(account_id)}
-    return [{
-        "id": p["id"], "path": p["path"], "archived": p["archived"],
-        "star_state": "batch_pending" if (s := starred.get(p["id"])) and not s["unstarred"]
-        else "batch_unstarred" if p["id"] in starred
-        else "new",
-    } for p in projects]
+    fetched_at = datetime.now().isoformat(timespec="seconds")
+    store.save_projects([{**p, "fetched_at": fetched_at} for p in projects])
+    return {"count": len(projects), "fetched_at": fetched_at}
 
 
-class BatchStarIn(BaseModel):
+class QueueAddIn(BaseModel):
     account_id: str
-    project_ids: list[int] | None = None  # None = 全部未打项目
+    project_id: int
 
 
-@app.post("/api/batch-star/start")
-def batch_star_start(body: BatchStarIn, _: None = Depends(require_auth)):
-    from . import batch_star
-    try:
-        run_id = batch_star.start(manager, body.account_id, body.project_ids)
-    except KeyError:
-        raise HTTPException(404, "账号不存在") from None
-    except RuntimeError as e:
-        raise HTTPException(409, str(e)) from None
-    return {"run_id": run_id}
+@app.post("/api/batch-star/queue")
+def batch_star_enqueue(body: QueueAddIn, _: None = Depends(require_auth)):
+    """把单个项目加入待 star 队列（行内 star 按钮即入队；队列由后台自动执行）。"""
+    account = store.get_account(body.account_id)
+    if account is None:
+        raise HTTPException(404, "账号不存在")
+    project = next((p for p in store.cached_projects() if p["id"] == body.project_id), None)
+    if project is None:
+        raise HTTPException(404, "项目不在缓存清单中（先更新清单）")
+    if project.get("archived"):
+        raise HTTPException(400, "项目已归档，无法 star")
+    rec = store.queue_star(body.account_id, body.project_id, project["path"])
+    return rec
 
 
-@app.post("/api/batch-star/stop/{run_id}")
-def batch_star_stop(run_id: str, _: None = Depends(require_auth)):
-    from . import batch_star
-    if not batch_star.request_cancel(manager, run_id):
-        raise HTTPException(404, "运行不存在")
+@app.post("/api/batch-star/queue/{account_id}/pause")
+def batch_star_pause(account_id: str, _: None = Depends(require_auth)):
+    """暂停队列：当前项目完成后停下，剩余项目留在队列。"""
+    if store.get_account(account_id) is None:
+        raise HTTPException(404, "账号不存在")
+    manager.queue_paused.add(account_id)
+    return {"ok": True}
+
+
+@app.post("/api/batch-star/queue/{account_id}/resume")
+def batch_star_resume(account_id: str, _: None = Depends(require_auth)):
+    """恢复队列执行。"""
+    if store.get_account(account_id) is None:
+        raise HTTPException(404, "账号不存在")
+    manager.queue_paused.discard(account_id)
     return {"ok": True}
 
 
 @app.get("/api/batch-star/records/{account_id}")
 def batch_star_records(account_id: str, _: None = Depends(require_auth)):
+    """star 记账（含队列/已 star/已取消），供任务中心与进度展示。"""
     return store.list_stars(account_id)
 
 

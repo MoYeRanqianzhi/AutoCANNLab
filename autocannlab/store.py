@@ -198,6 +198,17 @@ class Store:
     def _stars_path(self) -> Path:
         return self.dir / "stars.json"
 
+    def _projects_cache_path(self) -> Path:
+        return self.dir / "cann-projects.json"
+
+    def cached_projects(self) -> list[dict]:
+        with _lock:
+            return _load(self._projects_cache_path(), [])
+
+    def save_projects(self, projects: list[dict]) -> None:
+        with _lock:
+            _atomic_write(self._projects_cache_path(), projects)
+
     def list_stars(self, account_id: str | None = None) -> list[dict]:
         with _lock:
             data = _load(self._stars_path(), {"stars": []})
@@ -220,7 +231,8 @@ class Store:
                 "project_id": project_id,
                 "path": path,
                 "source": source,
-                "starred_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "status": "queued",
+                "starred_at": None,
                 "unstarred": False,
                 "unstarred_at": None,
             }
@@ -228,13 +240,39 @@ class Store:
             _atomic_write(self._stars_path(), data)
             return rec
 
-    def enqueue_unstar(self, account_id: str, project_id, path: str, due_ts: float) -> None:
-        """为已记录的 star 设置取消到期时间。仅 batch 来源会入队（安全护栏）。"""
+    def queue_star(self, account_id: str, project_id, path: str) -> dict:
+        """把项目加入待 star 队列（status=queued）；已存在则原样返回。"""
+        return self.add_star(account_id, project_id, path, source="batch")
+
+    def mark_starred(self, account_id: str, project_id) -> dict | None:
+        """队列项实际打上 star 后调用：置 starred 并排入延迟取消。"""
         with _lock:
             data = _load(self._stars_path(), {"stars": []})
             for s in data.get("stars", []):
                 if (s["account_id"] == account_id and s["project_id"] == project_id
                         and s.get("source") == "batch"):
+                    s["status"] = "starred"
+                    s["starred_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    _atomic_write(self._stars_path(), data)
+                    return s
+        return None
+
+    def queued_projects(self, account_id: str) -> list[dict]:
+        return [s for s in self.list_stars(account_id)
+                if s.get("source") == "batch" and s.get("status") == "queued"]
+
+    def abandon_queue_item(self, account_id: str, project_id) -> None:
+        """队列项终结但 star 未打上（页面打不开/接口失败）：置 unstarred 终态，
+        不进取消流程（没有 star 就不该取消），也从待执行队列消失。"""
+        self.mark_unstarred(account_id, project_id)
+
+    def enqueue_unstar(self, account_id: str, project_id, path: str, due_ts: float) -> None:
+        """为已 star 的记录设置取消到期时间。仅 starred/batch 来源会入队（安全护栏）。"""
+        with _lock:
+            data = _load(self._stars_path(), {"stars": []})
+            for s in data.get("stars", []):
+                if (s["account_id"] == account_id and s["project_id"] == project_id
+                        and s.get("source") == "batch" and s.get("status") in ("queued", "starred")):
                     s["unstar_due"] = due_ts
                     _atomic_write(self._stars_path(), data)
                     return
